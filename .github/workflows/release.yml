@@ -1069,16 +1069,21 @@ jobs:
         uses: actions/cache@v4
         with:
           path: D:\libiimod-prefix-${{ matrix.build_type }}
-          key: libiimod-${{ hashFiles('third-party/libiimod/**') }}-${{ runner.os }}-${{ matrix.build_type }}-v1
+          key: libiimod-${{ hashFiles('third-party/libiimod/**') }}-${{ runner.os }}-${{ matrix.build_type }}-v2
 
       - name: Build libiimod from source
         if: steps.libiimod-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $prefix = "D:\libiimod-prefix-${{ matrix.build_type }}"
+          $prefix  = "D:\libiimod-prefix-${{ matrix.build_type }}"
+          $triplet = '${{ steps.meta.outputs.triplet }}'
+          # Route find_package(TIFF) through the vcpkg-installed tree
+          # populated by the windows-vcpkg pre-job.
           cmake -S third-party/libiimod -B D:\libiimod-build `
             -G "Visual Studio 17 2022" -A x64 `
+            -DCMAKE_TOOLCHAIN_FILE="C:/vcpkg/scripts/buildsystems/vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET="$triplet" `
             -DCMAKE_INSTALL_PREFIX="$prefix"
           cmake --build D:\libiimod-build --config ${{ matrix.build_type }} --target install
           Remove-Item -Recurse -Force D:\libiimod-build
