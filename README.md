@@ -54,6 +54,14 @@ Every archive contains, in one tree:
   `vcglib-config.cmake` is generated so `find_package(vcglib CONFIG)`
   exposes a `vcglib::vcglib` INTERFACE target that depends on the
   libcvc-deps-bundled Eigen3.
+- libiimod (MRC / TIFF / image-file I/O subset of IMOD, built from
+  the read-only archive [LabShare-Archive/IMOD](https://github.com/LabShare-Archive/IMOD)
+  at a pinned upstream commit — see
+  [`third-party/libiimod/CMakeLists.txt`](third-party/libiimod/CMakeLists.txt)).
+  Shipped as a static `libiimod.a` / `iimod.lib` plus headers under
+  `include/libiimod/` and a `libiimod-config.cmake` that exports
+  the `libiimod::iimod` imported target. libcvc consumes this in
+  place of its previous in-tree copy.
 
 F2Dock additionally needs `cvc::xmlrpc` from libcvc itself; that is
 shipped by the libcvc release artifacts, not by libcvc-deps.
@@ -157,6 +165,9 @@ the toolkit installer's own setup.
   vcpkg `clapack` + `openblas`
 - vcglib: 2025.07
   (SHA256 `e49fc9342d5476b3e39a5e1939b965b57c91d7a17b4f97b8c5eaf01228b16cf0`)
+- libiimod: LabShare-Archive/IMOD
+  commit `8c592ce4cfae5e0748314da56d73334de7465776` (archived,
+  read-only since 2018-07-15)
 
 A given release of libcvc-deps is intended to be used with the
 corresponding (or older) libcvc release. Bumping a major version

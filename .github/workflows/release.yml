@@ -48,6 +48,9 @@ permissions:
 #     ImageMagick (Q16-HDRI)
 #   - Qt 6.7.x (Core, Gui, Widgets, OpenGL, OpenGLWidgets)
 #   - VTK 9.5.0 built against Qt 6 (no QtQuick modules)
+#   - libiimod (IMOD's MRC/TIFF image-file I/O subset, built from
+#     the LabShare-Archive/IMOD upstream at a pinned SHA — see
+#     third-party/libiimod/CMakeLists.txt)
 #
 # CUDA toolkit is intentionally NOT bundled — consumers install it
 # directly via Jimver/cuda-toolkit on the build host.
@@ -123,6 +126,27 @@ jobs:
             libxrender-dev libxcursor-dev libxinerama-dev libxi-dev \
             libnfft3-dev libeigen3-dev liblapack-dev libblas-dev \
             gfortran
+
+      # ── libiimod built from upstream LabShare-Archive/IMOD ──
+      #    Curated source set; CMakeLists in third-party/libiimod/
+      #    pins the upstream SHA and configures the bundle install.
+      - name: Cache libiimod install
+        id: libiimod-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/libiimod-prefix-${{ matrix.build_type }}
+          key: libiimod-${{ hashFiles('third-party/libiimod/**') }}-${{ runner.os }}-${{ matrix.build_type }}-v1
+
+      - name: Build libiimod from source
+        if: steps.libiimod-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          cmake -S third-party/libiimod -B libiimod-build -G Ninja \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DCMAKE_INSTALL_PREFIX=$HOME/libiimod-prefix-${{ matrix.build_type }} \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+          cmake --build libiimod-build --parallel --target install
+          rm -rf libiimod-build
 
       # ── VTK 9.5 built against Qt6, cached ──
       - name: Cache VTK install tree
@@ -319,6 +343,21 @@ jobs:
             [ -d $HOME/vtk-qt6/bin ]   && cp -R $HOME/vtk-qt6/bin/.   "$DIST/bin/"   2>/dev/null || true
           fi
 
+      # ── Stage libiimod from the cached install ──
+      - name: Stage libiimod
+        run: |
+          set -euo pipefail
+          DIST="$PWD/${{ steps.meta.outputs.stem }}"
+          PFX="$HOME/libiimod-prefix-${{ matrix.build_type }}"
+          if [ -d "$PFX" ]; then
+            mkdir -p "$DIST/include/libiimod" "$DIST/lib/cmake/libiimod"
+            cp -R "$PFX/include/libiimod/." "$DIST/include/libiimod/"
+            cp -R "$PFX/lib/libiimod.a"     "$DIST/lib/" 2>/dev/null || true
+            if [ -d "$PFX/lib/cmake/libiimod" ]; then
+              cp -R "$PFX/lib/cmake/libiimod/." "$DIST/lib/cmake/libiimod/"
+            fi
+          fi
+
       # ── Pull in transitive NEEDED libraries via ldd ──
       #
       # The explicit allowlist above (libboost_*, libhdf5*, libQt6*, …)
@@ -486,6 +525,25 @@ jobs:
             eigen lapack \
             autoconf automake libtool
 
+      # ── libiimod built from upstream LabShare-Archive/IMOD ──
+      - name: Cache libiimod install
+        id: libiimod-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/libiimod-prefix-${{ matrix.build_type }}
+          key: libiimod-${{ hashFiles('third-party/libiimod/**') }}-${{ runner.os }}-${{ matrix.build_type }}-v1
+
+      - name: Build libiimod from source
+        if: steps.libiimod-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euxo pipefail
+          cmake -S third-party/libiimod -B libiimod-build -G Ninja \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DCMAKE_INSTALL_PREFIX="$HOME/libiimod-prefix-${{ matrix.build_type }}" \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+          cmake --build libiimod-build --parallel --target install
+          rm -rf libiimod-build
+
       - name: Configure + install marker config
         run: |
           STEM="${{ steps.meta.outputs.stem }}"
@@ -550,6 +608,21 @@ jobs:
           if [ -n "$QT_PREFIX" ] && [ -d "$QT_PREFIX/share/qt/plugins" ]; then
             mkdir -p "$DIST/plugins"
             cp -R "$QT_PREFIX/share/qt/plugins/." "$DIST/plugins/"
+          fi
+
+      # ── Stage libiimod from the cached install ──
+      - name: Stage libiimod
+        run: |
+          set -euo pipefail
+          DIST="$PWD/${{ steps.meta.outputs.stem }}"
+          PFX="$HOME/libiimod-prefix-${{ matrix.build_type }}"
+          if [ -d "$PFX" ]; then
+            mkdir -p "$DIST/include/libiimod" "$DIST/lib/cmake/libiimod"
+            cp -R "$PFX/include/libiimod/." "$DIST/include/libiimod/"
+            cp -R "$PFX/lib/libiimod.a"     "$DIST/lib/" 2>/dev/null || true
+            if [ -d "$PFX/lib/cmake/libiimod" ]; then
+              cp -R "$PFX/lib/cmake/libiimod/." "$DIST/lib/cmake/libiimod/"
+            fi
           fi
 
       # ── Build NFFT3 from source ──
@@ -984,6 +1057,46 @@ jobs:
             -DCMAKE_INSTALL_PREFIX="$dist"
           cmake --install build --config ${{ matrix.build_type }}
           New-Item -ItemType Directory -Force -Path "$dist/bin","$dist/lib","$dist/include","$dist/share" | Out-Null
+
+      # ── libiimod built from upstream LabShare-Archive/IMOD ──
+      - name: Cache libiimod install
+        id: libiimod-cache
+        uses: actions/cache@v4
+        with:
+          path: D:\libiimod-prefix-${{ matrix.build_type }}
+          key: libiimod-${{ hashFiles('third-party/libiimod/**') }}-${{ runner.os }}-${{ matrix.build_type }}-v1
+
+      - name: Build libiimod from source
+        if: steps.libiimod-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $prefix = "D:\libiimod-prefix-${{ matrix.build_type }}"
+          cmake -S third-party/libiimod -B D:\libiimod-build `
+            -G "Visual Studio 17 2022" -A x64 `
+            -DCMAKE_INSTALL_PREFIX="$prefix"
+          cmake --build D:\libiimod-build --config ${{ matrix.build_type }} --target install
+          Remove-Item -Recurse -Force D:\libiimod-build
+
+      - name: Stage libiimod
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $stem   = '${{ steps.meta.outputs.stem }}'
+          $dist   = Join-Path $env:GITHUB_WORKSPACE $stem
+          $prefix = "D:\libiimod-prefix-${{ matrix.build_type }}"
+          if (Test-Path $prefix) {
+            New-Item -ItemType Directory -Force -Path "$dist/include/libiimod","$dist/lib/cmake/libiimod" | Out-Null
+            Copy-Item -Recurse -Force "$prefix/include/libiimod/*" "$dist/include/libiimod/"
+            $libDir = Join-Path $prefix 'lib'
+            if (Test-Path $libDir) {
+              Get-ChildItem -Path $libDir -Filter 'iimod.lib' -File -ErrorAction SilentlyContinue `
+                | Copy-Item -Destination "$dist/lib/" -Force
+              if (Test-Path "$prefix/lib/cmake/libiimod") {
+                Copy-Item -Recurse -Force "$prefix/lib/cmake/libiimod/*" "$dist/lib/cmake/libiimod/"
+              }
+            }
+          }
 
       - name: Stage vcpkg + Qt + VTK trees
         shell: pwsh
