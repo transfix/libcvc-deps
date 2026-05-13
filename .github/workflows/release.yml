@@ -241,13 +241,16 @@ jobs:
           copy_libs 'libgsl'
           copy_libs 'libgslcblas'
           # log4cplus comes from our own source build (see earlier
-          # 'Build log4cplus from source' step); pull both .so and .a
-          # from $HOME/log4cplus-prefix/lib regardless of link flavor
-          # — the static bundle wants the .a, the shared bundle wants
-          # the .so, but copying both is harmless and keeps the
-          # downstream consumer's choice open.
+          # 'Build log4cplus from source' step). Pick the artifact
+          # flavor that matches this bundle: .a for static bundles,
+          # .so / .so.* for shared bundles.
           if [ -d "$HOME/log4cplus-prefix/lib" ]; then
-            for pat in '*.a' '*.so' '*.so.*'; do
+            if [ "${{ matrix.link }}" = "static" ]; then
+              l4c_pats=('*.a')
+            else
+              l4c_pats=('*.so' '*.so.*')
+            fi
+            for pat in "${l4c_pats[@]}"; do
               find "$HOME/log4cplus-prefix/lib" -maxdepth 1 -name "$pat" -print0 \
                 | xargs -0 -r cp -P -t "$DIST/lib/" 2>/dev/null || true
             done
