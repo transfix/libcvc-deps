@@ -10,19 +10,18 @@
 #
 # Files pulled from upstream:
 #   libiimod/  iilikemrc.c iimage.c iimrc.c iitif.c mrcfiles.c
-#              mrcsec.c mrcslice.c plist.c sliceproc.c tiffstub.c
-#              diffusion.c
+#              mrcsec.c mrcslice.c plist.c sliceproc.c diffusion.c
 #   libcfshr/  b3dutil.c ilist.c islice.c parallelwrite.c
 #   include/   b3dutil.h cfsemshare.h hvemtypes.h iimage.h ilist.h
-#              mrcc.h mrcfiles.h mrcslice.h notiff.h notiffio.h
-#              sliceproc.h
+#              mrcc.h mrcfiles.h mrcslice.h sliceproc.h
 # imodconfig.h is shipped locally (upstream generates it from the
 # setup script; we ship a fixed copy matching libcvc's historic
 # build configuration).
 #
-# Compile-time defines:
-#   NOTIFFLIBS  — use the in-tree TIFF API stubs (notiff.h / tiffstub.c)
-#                 rather than linking against system libtiff.
+# TIFF support is ENABLED: iitif.c is compiled against the system
+# libtiff discovered via `find_package(TIFF REQUIRED)`. The upstream
+# `tiffstub.c` / `notiff*.h` files are NOT used — those are only
+# relevant when building without libtiff, which we no longer do.
 
 cmake_minimum_required(VERSION 3.16)
 project(libiimod
@@ -35,6 +34,11 @@ include(FetchContent)
 include(CMakePackageConfigHelpers)
 include(GNUInstallDirs)
 include(TestBigEndian)
+
+# libtiff is a hard dependency — iitif.c (which provides the TIFF
+# read/write paths used by libcvc) #include's <tiffio.h> and calls
+# TIFFOpen/TIFFGetField/... directly when NOTIFFLIBS is not defined.
+find_package(TIFF REQUIRED)
 
 # Pinned to LabShare-Archive/IMOD master HEAD as of 2026-05-13.
 # The repo is archived (read-only since 2018-07-15) so this commit
@@ -63,7 +67,6 @@ set(LIBIIMOD_SOURCES
   "${IMOD_SRC}/libiimod/mrcslice.c"
   "${IMOD_SRC}/libiimod/plist.c"
   "${IMOD_SRC}/libiimod/sliceproc.c"
-  "${IMOD_SRC}/libiimod/tiffstub.c"
   "${IMOD_SRC}/libiimod/diffusion.c"
   "${IMOD_SRC}/libcfshr/b3dutil.c"
   "${IMOD_SRC}/libcfshr/ilist.c"
@@ -80,8 +83,6 @@ set(LIBIIMOD_HEADERS
   "${IMOD_SRC}/include/mrcc.h"
   "${IMOD_SRC}/include/mrcfiles.h"
   "${IMOD_SRC}/include/mrcslice.h"
-  "${IMOD_SRC}/include/notiff.h"
-  "${IMOD_SRC}/include/notiffio.h"
   "${IMOD_SRC}/include/sliceproc.h"
 )
 
@@ -120,9 +121,13 @@ target_include_directories(iimod
 
 target_compile_definitions(iimod
   PUBLIC
-    NOTIFFLIBS
     $<$<BOOL:${LIBIIMOD_BIG_ENDIAN}>:B3D_BIG_ENDIAN>
 )
+
+# Link libtiff into libiimod. PUBLIC so consumers transitively pick
+# up TIFF::TIFF when they link `libiimod::iimod` — callers of
+# iiTIFFopen etc. never need to know libtiff is in play.
+target_link_libraries(iimod PUBLIC TIFF::TIFF)
 
 if(MSVC)
   target_compile_definitions(iimod PRIVATE _CRT_SECURE_NO_WARNINGS)

@@ -44,13 +44,14 @@ permissions:
 #   libcvc-deps-<ver>-windows-<arch>-<config>[-static].zip
 #
 # Contents:
-#   - Boost, HDF5 (C+CXX), FFTW3, GSL, log4cplus, CGAL+GMP+MPFR,
-#     ImageMagick (Q16-HDRI)
+#   - Boost, HDF5 (C+CXX), FFTW3, GSL, log4cplus, libtiff,
+#     CGAL+GMP+MPFR, ImageMagick (Q16-HDRI)
 #   - Qt 6.7.x (Core, Gui, Widgets, OpenGL, OpenGLWidgets)
 #   - VTK 9.5.0 built against Qt 6 (no QtQuick modules)
 #   - libiimod (IMOD's MRC/TIFF image-file I/O subset, built from
 #     the LabShare-Archive/IMOD upstream at a pinned SHA — see
-#     third-party/libiimod/CMakeLists.txt)
+#     third-party/libiimod/CMakeLists.txt; linked against the
+#     bundled libtiff so TIFF reads/writes are enabled)
 #
 # CUDA toolkit is intentionally NOT bundled — consumers install it
 # directly via Jimver/cuda-toolkit on the build host.
@@ -119,7 +120,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential cmake ninja-build patchelf pkg-config \
             libboost-all-dev libhdf5-dev libfftw3-dev libgsl-dev \
-            libmagick++-dev liblog4cplus-dev \
+            libmagick++-dev liblog4cplus-dev libtiff-dev \
             libcgal-dev libgmp-dev libmpfr-dev \
             qt6-base-dev qt6-base-dev-tools libqt6opengl6-dev \
             libgl1-mesa-dev libxt-dev mesa-common-dev libglew-dev \
@@ -219,6 +220,7 @@ jobs:
           copy_libs 'libgsl'
           copy_libs 'libgslcblas'
           copy_libs 'liblog4cplus'
+          copy_libs 'libtiff'
           copy_libs 'libMagick++-'
           copy_libs 'libMagickCore-'
           copy_libs 'libMagickWand-'
@@ -248,7 +250,7 @@ jobs:
             case "$base" in
               # Bundle CMake configs for everything we ship.
               Boost*|hdf5|HDF5|GSL|CGAL|log4cplus|ImageMagick|Magick*|\
-              Qt6*|VTK|vtk*|GLEW|\
+              Qt6*|VTK|vtk*|GLEW|tiff|TIFF|\
               eigen3|Eigen3*|lapack*|LAPACK*|blas*|BLAS*)
                 cp -R "$d" "$DIST/lib/cmake/"
                 ;;
@@ -313,10 +315,13 @@ jobs:
             mkdir -p "$DIST/include/hdf5"
             cp -R /usr/include/hdf5/serial/. "$DIST/include/hdf5/"
           fi
-          # Top-level header files (fftw3.h, gmp.h, mpfr.h, …)
+          # Top-level header files (fftw3.h, gmp.h, mpfr.h, tiff.h, …)
           for f in /usr/include/fftw3.h /usr/include/fftw3.f \
                    /usr/include/fftw3l.h /usr/include/fftw3q.h \
-                   /usr/include/gmp.h /usr/include/mpfr.h /usr/include/mpf2mpfr.h ; do
+                   /usr/include/gmp.h /usr/include/mpfr.h /usr/include/mpf2mpfr.h \
+                   /usr/include/tiff.h /usr/include/tiffio.h \
+                   /usr/include/tiffvers.h /usr/include/tiffconf.h \
+                   /usr/include/tiffio.hxx ; do
             [ -f "$f" ] && cp "$f" "$DIST/include/"
           done
 
@@ -519,7 +524,7 @@ jobs:
           # source in a later step using the same autotools toolchain
           # the Linux package and our Windows MSYS2 build use.
           brew install cmake ninja \
-            boost hdf5 fftw gsl imagemagick log4cplus \
+            boost hdf5 fftw gsl imagemagick log4cplus libtiff \
             cgal gmp mpfr \
             qt@6 vtk \
             eigen lapack \
@@ -573,7 +578,7 @@ jobs:
           # Bulk-copy each brew prefix (include + lib + share +
           # bin) into the staged tree.
           for pkg in boost hdf5 fftw gsl log4cplus imagemagick \
-                     cgal gmp mpfr qt@6 vtk \
+                     cgal gmp mpfr qt@6 vtk libtiff \
                      eigen lapack ; do
             P=$(brew --prefix "$pkg" 2>/dev/null || true)
             [ -n "$P" ] || continue
@@ -853,7 +858,7 @@ jobs:
             'boost-foreach','boost-function','boost-lambda','boost-lexical-cast',
             'boost-multi-array','boost-optional','boost-smart-ptr','boost-tuple',
             'boost-utility',
-            'hdf5[cpp]','fftw3','gsl','imagemagick','log4cplus',
+            'hdf5[cpp]','fftw3','gsl','imagemagick','log4cplus','tiff',
             'cgal','glew',
             # F2Dock / F3Dock science stack.
             #   eigen3   — header-only linear algebra
