@@ -32,6 +32,7 @@ and supply-chain protections for package names.
 | G5 | Every published artifact is signed by the publisher's key; the daemon and clients verify signatures before accepting. |
 | G6 | A public publisher directory lets anyone query who owns a package name and inspect their signing key. |
 | G7 | The daemon uses a database (SQLite/MySQL/PostgreSQL via SQLModel) instead of YAML files. |
+| G8 | Expand platform coverage beyond Linux/macOS/Windows to BSDs, Haiku, and other OSes, and beyond x86_64/arm64 to RISC-V, MIPS, POWER, etc. Self-hosted and cross-compilation runners populate the catalog for all targets. |
 
 ### Non-goals
 
@@ -180,7 +181,136 @@ versions.
 
 ---
 
-## 4. GitHub Releases as a transitional backend
+## 4. Multi-platform & multi-OS expansion
+
+### 4.1. Current coverage (v1.3)
+
+| OS | Arch | Runner |
+|----|------|--------|
+| Linux (Ubuntu 24.04) | x86_64 | `ubuntu-latest` (GitHub-hosted) |
+| macOS (Sonoma+) | arm64 | `macos-latest` (GitHub-hosted) |
+| Windows (Server 2022+) | x86_64 | `windows-latest` (GitHub-hosted) |
+
+### 4.2. Target coverage (v2.x)
+
+| OS | Arch | Runner strategy |
+|----|------|----------------|
+| Linux (glibc) | x86_64 | GitHub-hosted |
+| Linux (glibc) | aarch64 / arm64 | GitHub `ubuntu-24.04-arm` or self-hosted |
+| Linux (glibc) | riscv64 | Self-hosted or QEMU cross-build |
+| Linux (musl / Alpine) | x86_64, aarch64 | Docker `alpine:latest` on GitHub-hosted |
+| macOS | arm64 | GitHub-hosted |
+| macOS | x86_64 | GitHub-hosted (Rosetta or Intel runner) |
+| Windows | x86_64 | GitHub-hosted |
+| Windows | arm64 | Self-hosted (Snapdragon Dev Kit or Azure arm64 VM) |
+| FreeBSD | x86_64, aarch64 | Self-hosted jail or `cross-platform-actions/action` |
+| NetBSD | x86_64, aarch64 | Self-hosted VM or `cross-platform-actions/action` |
+| OpenBSD | x86_64 | Self-hosted VM or `cross-platform-actions/action` |
+| HaikuOS | x86_64 | Self-hosted VM |
+| Linux (glibc) | ppc64le | Self-hosted or IBM Cloud |
+| Linux (glibc) | s390x | Self-hosted or IBM Cloud |
+| Linux (glibc) | mips64el | Self-hosted or QEMU cross-build |
+
+### 4.3. Platform / arch identifiers
+
+The `platform` and `arch` fields in recipes, catalogs, and the
+database are free-form strings (not enums) to allow adding new
+targets without schema changes.  Canonical values:
+
+**Platforms**: `linux`, `macos`, `windows`, `freebsd`, `netbsd`,
+`openbsd`, `haiku`, `linux-musl`
+
+**Architectures**: `x86_64`, `arm64`, `riscv64`, `ppc64le`,
+`s390x`, `mips64el`, `armv7l`, `i686`
+
+`cvcpkg platform.py` will grow to detect these from `sys.platform`
+and `platform.machine()`, with an `--platform` / `--arch` CLI
+override for cross-compilation scenarios.
+
+### 4.4. Runner infrastructure
+
+**GitHub-hosted runners** cover Linux x86_64/arm64, macOS arm64,
+and Windows x86_64.  Everything else requires either:
+
+1. **Self-hosted runners**: physical or cloud VMs running the target
+   OS natively.  We register them with GitHub Actions using labels
+   like `freebsd-x86_64`, `haiku-x86_64`, `riscv64-linux`.  Recipes
+   build in a native shell.
+
+2. **Cross-compilation via QEMU/Docker**: for architectures where
+   native hardware is scarce (RISC-V, MIPS, POWER), we can use
+   QEMU user-mode emulation inside Docker on a GitHub-hosted x86_64
+   runner.  This is slower but requires no dedicated hardware.
+
+3. **`cross-platform-actions/action`**: a GitHub Action that boots
+   FreeBSD, NetBSD, or OpenBSD in a VM on a GitHub-hosted runner
+   (uses QEMU under the hood).  Good for CI validation; may be too
+   slow for full recipe builds.
+
+4. **Dedicated build servers**: for high-frequency targets (FreeBSD
+   arm64, Linux riscv64), we provision persistent VMs with the
+   GitHub Actions runner agent and a warm build cache.
+
+### 4.5. Recipe portability
+
+Recipes must declare which platforms they support via
+`build_matrix[].platform`.  Recipes that use platform-specific
+build scripts (`build.sh`, `build.ps1`) need per-platform variants.
+The recipe schema already supports this via conditional deps:
+
+```yaml
+build_matrix:
+  - platform: linux
+    arch: x86_64
+  - platform: linux
+    arch: arm64
+  - platform: linux
+    arch: riscv64
+  - platform: freebsd
+    arch: x86_64
+  - platform: haiku
+    arch: x86_64
+
+build:
+  system: cmake
+  args:
+    - "-DCMAKE_BUILD_TYPE={{config}}"
+    - "-DBUILD_SHARED_LIBS={{shared}}"
+```
+
+Recipes that rely on system package managers (`apt`, `brew`, `vcpkg`)
+will need BSD-specific equivalents (`pkg`, `pkgsrc`, `pkgin`).  The
+`_common/env-*.sh` scripts will grow BSD and Haiku variants.
+
+### 4.6. Catalog growth projection
+
+With 25 components × 15 OS/arch combos × 2 configs × 2 link modes,
+the catalog could grow to ~1500 bundles per release version.  This
+reinforces the need for:
+
+- Database-backed catalog (§6) instead of flat YAML.
+- Multi-backend storage (§7) to distribute the load.
+- Per-component bundles so consumers only download their target.
+
+### 4.7. Testing strategy for exotic platforms
+
+Not every recipe will build on every platform from day one.  The
+approach:
+
+1. **Tier A** (must pass CI): Linux x86_64/arm64, macOS arm64,
+   Windows x86_64.  Build failures block the release.
+2. **Tier B** (best-effort CI): FreeBSD x86_64, Linux riscv64,
+   Linux musl x86_64.  Build failures are reported but don't block.
+3. **Tier C** (community-contributed): NetBSD, OpenBSD, HaikuOS,
+   MIPS, POWER.  Builds run on self-hosted runners when available.
+   Failures are tracked in issues but don't block CI.
+
+Tier promotion happens as recipes stabilize on a platform and
+runner availability improves.
+
+---
+
+## 5. GitHub Releases as a transitional backend
 
 GitHub Releases has served well as the initial distribution channel
 for libcvc-deps bundles, but it has scaling limits:
@@ -214,9 +344,9 @@ how to resolve `gh-release://` URIs indefinitely.
 
 ---
 
-## 5. Database layer (SQLModel)
+## 6. Database layer (SQLModel)
 
-### 5.1. Why SQLModel
+### 6.1. Why SQLModel
 
 The 1.x server stores tokens, audit entries, and the package index in
 YAML files.  This works for a single-node lab deployment but cannot
@@ -238,7 +368,7 @@ environment variable:
 | PostgreSQL | `postgresql://user:pw@db:5432/cvcpkg`    | Production multi-node  |
 | MySQL      | `mysql://user:pw@db:3306/cvcpkg`         | Enterprise deployments |
 
-### 5.2. Data model
+### 6.2. Data model
 
 ```
 Publisher
@@ -266,8 +396,8 @@ PackageRelease
   id              UUID PK
   name            FK → PackageName.name
   version         TEXT
-  platform        TEXT
-  arch            TEXT
+  platform        TEXT   (linux, macos, windows, freebsd, netbsd, openbsd, haiku, linux-musl, ...)
+  arch            TEXT   (x86_64, arm64, riscv64, ppc64le, s390x, mips64el, armv7l, i686, ...)
   config          TEXT   (release | debug)
   link            TEXT   (shared | static)
   sha256          TEXT
@@ -313,7 +443,7 @@ StorageBackend
   healthy         BOOL DEFAULT TRUE
 ```
 
-### 5.3. Migration from 1.x
+### 6.3. Migration from 1.x
 
 - A one-shot CLI command `cvcpkg-server migrate-from-v1 <state_dir>`
   reads the existing YAML files (tokens.yaml, audit.yaml, index.yaml)
@@ -323,9 +453,9 @@ StorageBackend
 
 ---
 
-## 6. Multi-backend storage & mirroring
+## 7. Multi-backend storage & mirroring
 
-### 6.1. Backend router
+### 7.1. Backend router
 
 The daemon maintains an ordered list of `StorageBackend` entries (from
 the database).  On **download**, the router:
@@ -345,13 +475,13 @@ On **publish**, the daemon:
    failure is logged but does not block the publish response).
 5. Records all successful URIs in `PackageRelease.storage_uris`.
 
-### 6.2. Health checks
+### 7.2. Health checks
 
 A background task (configurable interval, default 5 min) pings each
 backend's `head()` on a sentinel object.  Unhealthy backends are
 deprioritized until they recover.
 
-### 6.3. Client-side fallback
+### 7.3. Client-side fallback
 
 The `cvcpkg install` client also has its own backend list (from
 `~/.config/cvcpkg/config.yaml` mirrors).  If the daemon is
@@ -361,9 +491,9 @@ air-gapped install capability.
 
 ---
 
-## 7. Public publisher registration
+## 8. Public publisher registration
 
-### 7.1. Registration flow
+### 8.1. Registration flow
 
 ```
 User                           cvcpkg-server                   Admin
@@ -398,7 +528,7 @@ User                           cvcpkg-server                   Admin
    enforceability depends on deployment.  For CVC internal use, admin
    approval alone suffices.
 
-### 7.2. Why admin review instead of fully automated?
+### 8.2. Why admin review instead of fully automated?
 
 - Supply-chain attack surface: automated signup lets an attacker
   claim names before legitimate publishers do.
@@ -409,7 +539,7 @@ User                           cvcpkg-server                   Admin
   membership check) in a future minor release if the review queue
   becomes a bottleneck.
 
-### 7.3. CLI registration helper
+### 8.3. CLI registration helper
 
 ```bash
 # Generate a keypair if the user doesn't have one:
@@ -428,16 +558,16 @@ cvcpkg identity status --server https://pkg.cvc.example.org
 
 ---
 
-## 8. Package name governance
+## 9. Package name governance
 
-### 8.1. Name reservation
+### 9.1. Name reservation
 
 The first time a publisher successfully publishes a package with a
 given name, a `PackageName` row is created with `owner_id` pointing
 to that publisher.  Subsequent publishes to the same name must come
 from the same publisher (or an admin).
 
-### 8.2. Admin controls
+### 9.2. Admin controls
 
 | Action | Endpoint | Who |
 |--------|----------|-----|
@@ -447,13 +577,13 @@ from the same publisher (or an admin).
 | List all names | `GET /v2/admin/names` | admin |
 | Revoke publisher | `POST /v2/admin/publishers/{id}/suspend` | admin |
 
-### 8.3. Proactive name blocking
+### 9.3. Proactive name blocking
 
 Before a release, admins can pre-reserve names for well-known
 upstream projects (boost, hdf5, vtk, qt6, etc.) so that no one can
 squat them.  The seed list is derived from `packaging/components.yaml`.
 
-### 8.4. Name policy rules (enforced server-side)
+### 9.4. Name policy rules (enforced server-side)
 
 - Names must match `^[a-z][a-z0-9_-]{0,63}$`.
 - Names that are substrings or close Levenshtein-distance matches of
@@ -463,9 +593,9 @@ squat them.  The seed list is derived from `packaging/components.yaml`.
 
 ---
 
-## 9. Cryptographic publisher identity
+## 10. Cryptographic publisher identity
 
-### 9.1. Key type
+### 10.1. Key type
 
 Ed25519 (via the `cryptography` package or `PyNaCl`).  Ed25519 is:
 
@@ -474,7 +604,7 @@ Ed25519 (via the `cryptography` package or `PyNaCl`).  Ed25519 is:
 - Widely supported (OpenSSH, GPG, sigstore, TUF).
 - No parameter choice risk (unlike RSA key sizes or EC curves).
 
-### 9.2. Signing flow
+### 10.2. Signing flow
 
 ```
 Publisher (cvcpkg CLI)           cvcpkg-server
@@ -495,7 +625,7 @@ Publisher (cvcpkg CLI)           cvcpkg-server
   │  ◄─ 201 { published }           │
 ```
 
-### 9.3. Key rotation
+### 10.3. Key rotation
 
 - A publisher can register a **new** public key via
   `POST /v2/publishers/{id}/keys` (authenticated, requires current
@@ -505,7 +635,7 @@ Publisher (cvcpkg CLI)           cvcpkg-server
 - Admins can force-rotate a publisher's key if compromise is
   suspected.
 
-### 9.4. Client-side verification
+### 10.4. Client-side verification
 
 On `cvcpkg install`, the client:
 
@@ -520,9 +650,9 @@ On `cvcpkg install`, the client:
 
 ---
 
-## 10. Publisher directory
+## 11. Publisher directory
 
-### 10.1. Public endpoints
+### 11.1. Public endpoints
 
 | Endpoint | Description |
 |----------|-------------|
@@ -531,7 +661,7 @@ On `cvcpkg install`, the client:
 | `GET /v2/publishers/{username}/packages` | All packages published by this publisher. |
 | `GET /v2/names/{name}` | Which publisher owns this package name + publishing history. |
 
-### 10.2. Data exposed
+### 11.2. Data exposed
 
 - Username, display name (optional).
 - Public key (PEM) and fingerprint.
@@ -546,9 +676,9 @@ What is **not** exposed:
 
 ---
 
-## 11. Admin revocation powers
+## 12. Admin revocation powers
 
-### 11.1. Credential revocation
+### 12.1. Credential revocation
 
 An admin can revoke a publisher's credentials at any time:
 
@@ -567,7 +697,7 @@ This:
 Re-enabling requires `POST /v2/admin/publishers/{id}/reinstate` +
 a new public key upload by the publisher.
 
-### 11.2. Name revocation
+### 12.2. Name revocation
 
 An admin can strip a publisher's ownership of a specific package name
 without suspending their entire account:
@@ -580,7 +710,7 @@ POST /v2/admin/names/{name}/block
 This blocks new publishes to that name by anyone until the admin
 explicitly transfers it or unblocks it.
 
-### 11.3. Artifact revocation
+### 12.3. Artifact revocation
 
 Individual releases can be deleted (hard) or yanked (soft):
 
@@ -593,7 +723,7 @@ Individual releases can be deleted (hard) or yanked (soft):
 
 ---
 
-## 12. Phased delivery plan
+## 13. Phased delivery plan
 
 ### Phase 0: prerequisite 1.x releases (v1.3.x – v1.4.x)
 
@@ -672,9 +802,28 @@ Work that can ship under the 1.x line without breaking changes:
 - [ ] Performance benchmarking (target: 1000 packages, 50 publishers,
       4 backends).
 
+### Phase 8: multi-platform expansion (v2.1.0+)
+
+- [ ] Extend `platform.py` to detect FreeBSD, NetBSD, OpenBSD,
+      HaikuOS, musl-Linux, and additional architectures (riscv64,
+      ppc64le, s390x, mips64el, armv7l).
+- [ ] Add `_common/env-freebsd.sh`, `env-netbsd.sh`, `env-haiku.sh`
+      build environment scripts.
+- [ ] Provision self-hosted runners for Tier B platforms (FreeBSD
+      x86_64, Linux riscv64, Linux musl x86_64).
+- [ ] Set up QEMU cross-build Docker images for riscv64, mips64el,
+      ppc64le.
+- [ ] Port core recipes (zlib, boost, fftw3, hdf5) to FreeBSD and
+      Linux arm64/riscv64 as proof-of-concept.
+- [ ] Add `cross-platform-actions/action` jobs for FreeBSD/NetBSD
+      CI validation.
+- [ ] Establish Tier A / B / C promotion criteria and tracking
+      dashboard.
+- [ ] Community contribution guide for adding new platform support.
+
 ---
 
-## 13. New dependencies
+## 14. New dependencies
 
 | Package | Purpose | Version |
 |---------|---------|---------|
@@ -693,7 +842,7 @@ All database drivers except `aiosqlite` are optional extras:
 
 ---
 
-## 14. API versioning
+## 15. API versioning
 
 The v2 server mounts all new endpoints under `/v2/`.  The existing
 `/v1/` endpoints continue to work (backed by the same database) for
@@ -705,9 +854,9 @@ backward compatibility.  Deprecation timeline:
 
 ---
 
-## 15. Deployment considerations
+## 16. Deployment considerations
 
-### 15.1. Single-node (lab / small team)
+### 16.1. Single-node (lab / small team)
 
 ```bash
 pip install cvcpkg[server]
@@ -717,7 +866,7 @@ cvcpkg-server run --database sqlite:///var/lib/cvcpkg/cvcpkg.db
 SQLite mode — zero external dependencies.  Suitable for ≤5 publishers,
 ≤500 packages.
 
-### 15.2. Production (multi-node)
+### 16.2. Production (multi-node)
 
 ```yaml
 # docker-compose.yml sketch
@@ -738,7 +887,7 @@ services:
       replicas: 3
 ```
 
-### 15.3. Filesystem-only (no daemon, no network)
+### 16.3. Filesystem-only (no daemon, no network)
 
 ```bash
 # Build and publish to a shared directory:
@@ -755,7 +904,7 @@ No daemon, no database, no network.  The shared directory can live
 on NFS, a USB drive, or a local path.  This is the simplest
 deployment and will always be supported.
 
-### 15.4. Air-gapped / offline
+### 16.4. Air-gapped / offline
 
 An operator runs `cvcpkg mirror sync --from https://pkg.cvc.example.org
 --to file:///mnt/packages` on an internet-connected machine, then
@@ -766,7 +915,7 @@ the synced directory with `--catalog /mnt/packages`.
 
 ---
 
-## 16. Security model summary
+## 17. Security model summary
 
 | Threat | Mitigation |
 |--------|------------|
@@ -783,7 +932,7 @@ the synced directory with `--catalog /mnt/packages`.
 
 ---
 
-## 17. Open questions
+## 18. Open questions
 
 1. **OAuth / OIDC integration**: Should we support "Log in with GitHub"
    for publisher registration?  This would let us auto-verify GitHub
@@ -807,3 +956,20 @@ the synced directory with `--catalog /mnt/packages`.
 
 6. **Federation**: Should two cvcpkg-server instances be able to
    mirror each other's catalogs (peer-to-peer registry federation)?
+
+7. **Cross-compilation toolchains**: Should cvcpkg ship or reference
+   cross-compilation toolchain recipes (e.g. `riscv64-linux-gnu-gcc`)
+   so that a single x86_64 host can build packages for all target
+   architectures?  Or should we rely on QEMU user-mode and build
+   natively inside emulated containers?
+
+8. **BSD package manager integration**: On FreeBSD/NetBSD/OpenBSD,
+   should recipes be allowed to declare `pkg` or `pkgsrc` system
+   dependencies (analogous to `apt` on Linux, `brew` on macOS)?  Do
+   we need a `_common/env-freebsd.sh` equivalent for each BSD?
+
+9. **Runner cost model**: Self-hosted runners for exotic platforms
+   (RISC-V boards, BSD VMs, Haiku) have ongoing maintenance and
+   hosting costs.  Should these be community-funded, project-funded,
+   or grant-funded?  Should community contributors be able to
+   register their own build runners?
