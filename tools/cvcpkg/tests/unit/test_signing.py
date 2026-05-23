@@ -24,9 +24,6 @@ from cvcpkg.signing import (
 )
 from cvcpkg.errors import SigningError
 
-# Skip entire module if cryptography is not installed
-pytest.importorskip("cryptography")
-
 
 # ── Fixtures ────────────────────────────────────────────────────
 

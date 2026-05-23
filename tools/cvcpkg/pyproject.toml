@@ -38,12 +38,11 @@ fastapi = { version = ">=0.100", optional = true }
 uvicorn = { version = ">=0.20", optional = true }
 pydantic = { version = "^2.0", optional = true }
 python-multipart = { version = ">=0.0.5", optional = true }
-cryptography = { version = ">=41.0", optional = true }
+cryptography = ">=41.0"
 
 [tool.poetry.extras]
 progress = ["tqdm"]
 server = ["fastapi", "uvicorn", "pydantic", "python-multipart"]
-signing = ["cryptography"]
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0"

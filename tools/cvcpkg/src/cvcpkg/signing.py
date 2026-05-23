@@ -3,10 +3,7 @@
 Provides key generation, archive signing (detached signatures), and
 verification.  Keys are stored in ``~/.config/cvcpkg/keys/``.
 
-Signing is optional: the ``cryptography`` package must be installed
-(available via ``pip install cvcpkg[signing]``).  All public API
-functions raise ``SigningUnavailable`` if at import time
-``cryptography`` is not present.
+The ``cryptography`` package is a required dependency of cvcpkg.
 
 Key format:
     Private key: PEM-encoded Ed25519 (optionally password-protected)
@@ -26,21 +23,7 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from cvcpkg.errors import SigningError, SigningUnavailable
-
-
-# ── Lazy import guard ───────────────────────────────────────────
-
-
-def _require_crypto() -> None:
-    """Raise ``SigningUnavailable`` if ``cryptography`` is missing."""
-    try:
-        import cryptography  # noqa: F401
-    except ImportError:
-        raise SigningUnavailable(
-            "Package signing requires the 'cryptography' package.\n"
-            "Install it with: pip install cvcpkg[signing]"
-        )
+from cvcpkg.errors import SigningError
 
 
 # ── Key fingerprinting ──────────────────────────────────────────
@@ -99,7 +82,6 @@ def generate_keypair(
         <keys_dir>/<label>.pub      — public key  (PEM)
         <keys_dir>/<label>.fp       — fingerprint (hex string)
     """
-    _require_crypto()
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
     from cryptography.hazmat.primitives import serialization
 
@@ -158,7 +140,6 @@ def load_private_key(
     password: str | None = None,
 ) -> "Ed25519PrivateKey":  # type: ignore[name-defined]
     """Load an Ed25519 private key from a PEM file."""
-    _require_crypto()
     from cryptography.hazmat.primitives.serialization import load_pem_private_key
 
     data = key_path.read_bytes()
@@ -174,7 +155,6 @@ def load_private_key(
 
 def load_public_key(pub_path: Path) -> "Ed25519PublicKey":  # type: ignore[name-defined]
     """Load an Ed25519 public key from a PEM file."""
-    _require_crypto()
     from cryptography.hazmat.primitives.serialization import load_pem_public_key
 
     data = pub_path.read_bytes()
@@ -237,7 +217,6 @@ def import_public_key(
     keys_dir: Path | None = None,
 ) -> KeyInfo:
     """Import a public key PEM string into the keyring."""
-    _require_crypto()
     from cryptography.hazmat.primitives.serialization import load_pem_public_key
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
@@ -284,7 +263,6 @@ def sign_file(
     Returns a ``Signature`` with the base64url-encoded sig and
     the key fingerprint.
     """
-    _require_crypto()
     priv = load_private_key(key_path, password)
     pub = priv.public_key()
     fp = _pub_fingerprint(pub)
@@ -305,7 +283,6 @@ def sign_bytes(
 
     Signs the SHA-256 digest of *data*.
     """
-    _require_crypto()
     priv = load_private_key(key_path, password)
     pub = priv.public_key()
     fp = _pub_fingerprint(pub)
@@ -353,7 +330,6 @@ def verify_file(
     Returns the ``KeyInfo`` of the key that validated the signature.
     Raises ``SigningError`` if no trusted key can verify the sig.
     """
-    _require_crypto()
     from cryptography.exceptions import InvalidSignature
 
     digest = hashlib.sha256(file_path.read_bytes()).digest()
@@ -366,7 +342,6 @@ def verify_bytes(
     keys_dir: Path | None = None,
 ) -> KeyInfo:
     """Verify a signature over raw bytes."""
-    _require_crypto()
     digest = hashlib.sha256(data).digest()
     return _verify_digest(digest, sig, keys_dir)
 

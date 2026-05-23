@@ -37,7 +37,3 @@ class AbiError(CvcpkgError):
 
 class SigningError(CvcpkgError):
     """A signing or verification operation failed."""
-
-
-class SigningUnavailable(CvcpkgError):
-    """The ``cryptography`` package is not installed."""

@@ -363,16 +363,8 @@ consumers that pinned the deleted version will get download errors.
 ## Package Signing
 
 cvcpkg supports **Ed25519 package signing** for publisher identity
-verification.  Signing is optional — it requires the `cryptography`
-Python package, available via:
-
-```bash
-pip install cvcpkg[signing]
-```
-
-All signing features degrade gracefully: if `cryptography` is not
-installed, signing commands raise a clear error and all other
-functionality continues to work.
+verification.  The `cryptography` package is a required dependency
+and is installed automatically with cvcpkg.
 
 ### Key management
 
@@ -587,7 +579,7 @@ chain indicates tampering or data corruption.
 
 ```bash
 cd tools/cvcpkg
-pip install -e '.[progress,server,signing]'
+pip install -e '.[progress,server]'
 pytest
 ```
 
