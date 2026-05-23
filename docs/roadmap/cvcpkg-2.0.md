@@ -40,42 +40,183 @@ and supply-chain protections for package names.
 - Running a CDN.  The daemon proxies or redirects to storage backends;
   it is not itself a high-throughput file server.
 - Automatic trust.  Every new publisher goes through human review.
+- **Requiring the daemon**.  The CLI must remain fully functional
+  without a running server — building from recipes, publishing to
+  a local directory, and installing from a filesystem catalog are
+  all first-class workflows that never touch the network.
 
 ---
 
 ## 2. Architecture overview
 
+cvcpkg operates in three tiers.  Every higher tier is optional —
+the CLI always works in the tier below it.
+
 ```
-                          ┌───────────────────────┐
-  cvcpkg CLI ────────────►│   cvcpkg-server 2.0   │
-  (install / publish)     │     (FastAPI)          │
-                          │                        │
-                          │  ┌─────────────────┐   │
-                          │  │ SQLModel DB      │   │
-                          │  │ (SQLite/PG/MySQL)│   │
-                          │  └─────────────────┘   │
-                          │                        │
-                          │  ┌─────────────────┐   │
-                          │  │ Backend Router   │   │
-                          │  │  ├─ GitHub Rel.  │   │
-                          │  │  ├─ S3           │   │
-                          │  │  ├─ SFTP         │   │
-                          │  │  ├─ HTTPS mirror │   │
-                          │  │  └─ Local disk   │   │
-                          │  └─────────────────┘   │
-                          │                        │
-                          │  ┌─────────────────┐   │
-                          │  │ Signature Verify │   │
-                          │  │ (Ed25519 / GPG)  │   │
-                          │  └─────────────────┘   │
-                          └───────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│ Tier 0 — Local only (no network, no daemon)                       │
+│                                                                   │
+│  recipes/       cvcpkg build-all ──► prefix/   (build from source)│
+│  recipes/       cvcpkg pack-all  ──► dist/     (create archives)  │
+│  dist/          cvcpkg push dist/ --dest ./repo  (publish to dir) │
+│  ./repo         cvcpkg install --catalog ./repo  (install from it)│
+└─────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────┐
+│ Tier 1 — Remote storage, no daemon                                │
+│                                                                   │
+│  cvcpkg push dist/ --dest s3://bucket/path                        │
+│  cvcpkg push dist/ --dest sftp://host/path                        │
+│  cvcpkg push dist/ --dest gh-release://transfix/libcvc-deps/v1.3.0│
+│  cvcpkg install --catalog https://example.org/catalog/latest.yaml │
+└─────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────┐
+│ Tier 2 — Daemon (production registry)                             │
+│                                                                   │
+│  cvcpkg CLI ────────────► cvcpkg-server 2.0 (FastAPI)             │
+│  (install / publish)       ├─ SQLModel DB (SQLite/PG/MySQL)       │
+│                            ├─ Backend Router                      │
+│                            │   ├─ S3                              │
+│                            │   ├─ SFTP                            │
+│                            │   ├─ HTTPS mirror                    │
+│                            │   ├─ GitHub Releases (transitional)  │
+│                            │   └─ Local disk                      │
+│                            ├─ Signature Verify (Ed25519)          │
+│                            └─ Publisher Directory                 │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 3. Database layer (SQLModel)
+## 3. Local-first operation (Tier 0 & Tier 1)
 
-### 3.1. Why SQLModel
+The daemon is the crown jewel of v2.0, but cvcpkg must **never**
+require it.  A researcher on a laptop, a CI runner in an air-gapped
+lab, or a developer iterating on a recipe must be able to build,
+publish, and install without touching the network.
+
+### 3.1. Filesystem catalog
+
+A **filesystem catalog** is a directory with a well-known layout:
+
+```
+repo/
+  catalog.yaml          # index of all packages in this repo
+  archives/
+    boost-1.83.0-cvc1-linux-x86_64-release-shared.tar.gz
+    boost-1.83.0-cvc1-linux-x86_64-release-shared.tar.gz.sig
+    hdf5-1.10.10-cvc1-linux-x86_64-release-shared.tar.gz
+    ...
+```
+
+`catalog.yaml` has the same schema as the daemon's catalog response
+(schema_version, revision, bundles list).  The CLI reads it directly;
+no HTTP involved.
+
+### 3.2. Publishing to a directory
+
+```bash
+# Build from recipes:
+cvcpkg build-all --platform linux --config release --link shared \
+  --prefix ./prefix --recipes-dir recipes
+
+# Pack into per-component archives:
+cvcpkg pack-all --prefix ./prefix --recipes-dir recipes --dist ./dist
+
+# Publish to a local repo directory:
+cvcpkg push ./dist/*.tar.gz --dest ./repo
+```
+
+`cvcpkg push --dest <dir>` copies archives into `<dir>/archives/`,
+regenerates `<dir>/catalog.yaml`, and (if the publisher has a local
+Ed25519 key) writes detached `.sig` files.  The result is a
+self-contained repo that can be:
+
+- Shared over NFS, USB, or `rsync`.
+- Served by any static HTTP server (`python -m http.server`).
+- Pointed at by `cvcpkg install --catalog ./repo`.
+- Imported into a running daemon via `cvcpkg-server import ./repo`.
+
+### 3.3. Installing from a directory
+
+```bash
+# Install directly from a local repo:
+cvcpkg install --catalog ./repo --prefix ./deps boost hdf5 fftw3
+
+# Or via a requirements file:
+cvcpkg install --from cvc-requirements.yaml --prefix ./deps \
+  --catalog ./repo
+```
+
+The `--catalog` flag accepts:
+- A local directory path (Tier 0).
+- A `file://` URI.
+- An `https://` URL pointing to `catalog.yaml` (Tier 1).
+- An `s3://`, `sftp://`, or `gh-release://` URI (Tier 1).
+- A daemon URL like `https://pkg.cvc.example.org` (Tier 2).
+
+When no `--catalog` is given, the CLI checks (in order):
+1. `catalog` key in the project's `cvc-requirements.yaml`.
+2. `catalog` key in `~/.config/cvcpkg/config.yaml`.
+3. The compiled-in default URL (currently GitHub Pages).
+
+### 3.4. Recipe-only workflow (no archives at all)
+
+For maximum reproducibility, a project can vendor its full recipe
+set and build everything from source:
+
+```bash
+cvcpkg build-all --recipes-dir ./vendored-recipes \
+  --platform linux --config release --link shared \
+  --prefix ./deps
+cmake -S . -B build -DCMAKE_PREFIX_PATH=$(pwd)/deps
+```
+
+This never fetches an archive, never contacts a server, and produces
+a deterministic prefix from pinned source tarballs.  This workflow
+is unchanged from 1.x and will remain supported in all future
+versions.
+
+---
+
+## 4. GitHub Releases as a transitional backend
+
+GitHub Releases has served well as the initial distribution channel
+for libcvc-deps bundles, but it has scaling limits:
+
+| Constraint | Limit | Current usage |
+|------------|-------|---------------|
+| Individual asset size | 2 GB | Windows bundles already ≥2 GB |
+| Total assets per release | Soft limit ~100 | v1.3.0 ships ~100 per-component archives × 4 platform/config combos |
+| Release storage per repo | 10 GB (soft) | Growing with each tagged release |
+| Download bandwidth | Generous but opaque | No SLA, no CDN control |
+| API rate limits | 5000 req/hr authenticated | Sufficient for now |
+
+The v2.0 plan treats GitHub Releases as **one backend among many**,
+not the primary.  The migration path:
+
+1. **v1.3.x** (now): GitHub Releases remains the primary backend.
+   Per-component archives are published there by CI.
+2. **v1.4.x**: Add S3 as a secondary/mirror backend alongside GitHub.
+   CI uploads to both.  `cvcpkg install` prefers S3 but falls back
+   to GitHub.
+3. **v2.0**: The daemon's backend router takes over.  GitHub Releases
+   becomes a fallback mirror.  New publishes go to S3/SFTP/local as
+   the primary.  Old GitHub Release URLs continue to work via the
+   `gh-release://` backend.
+4. **v2.x+**: GitHub Releases can be retired once all lockfiles
+   referencing those URIs have aged out.
+
+Crucially, even as we move away from GitHub as the primary host,
+**all existing lockfiles remain valid** — the backend router knows
+how to resolve `gh-release://` URIs indefinitely.
+
+---
+
+## 5. Database layer (SQLModel)
+
+### 5.1. Why SQLModel
 
 The 1.x server stores tokens, audit entries, and the package index in
 YAML files.  This works for a single-node lab deployment but cannot
@@ -97,7 +238,7 @@ environment variable:
 | PostgreSQL | `postgresql://user:pw@db:5432/cvcpkg`    | Production multi-node  |
 | MySQL      | `mysql://user:pw@db:3306/cvcpkg`         | Enterprise deployments |
 
-### 3.2. Data model
+### 5.2. Data model
 
 ```
 Publisher
@@ -172,7 +313,7 @@ StorageBackend
   healthy         BOOL DEFAULT TRUE
 ```
 
-### 3.3. Migration from 1.x
+### 5.3. Migration from 1.x
 
 - A one-shot CLI command `cvcpkg-server migrate-from-v1 <state_dir>`
   reads the existing YAML files (tokens.yaml, audit.yaml, index.yaml)
@@ -182,9 +323,9 @@ StorageBackend
 
 ---
 
-## 4. Multi-backend storage & mirroring
+## 6. Multi-backend storage & mirroring
 
-### 4.1. Backend router
+### 6.1. Backend router
 
 The daemon maintains an ordered list of `StorageBackend` entries (from
 the database).  On **download**, the router:
@@ -204,13 +345,13 @@ On **publish**, the daemon:
    failure is logged but does not block the publish response).
 5. Records all successful URIs in `PackageRelease.storage_uris`.
 
-### 4.2. Health checks
+### 6.2. Health checks
 
 A background task (configurable interval, default 5 min) pings each
 backend's `head()` on a sentinel object.  Unhealthy backends are
 deprioritized until they recover.
 
-### 4.3. Client-side fallback
+### 6.3. Client-side fallback
 
 The `cvcpkg install` client also has its own backend list (from
 `~/.config/cvcpkg/config.yaml` mirrors).  If the daemon is
@@ -220,9 +361,9 @@ air-gapped install capability.
 
 ---
 
-## 5. Public publisher registration
+## 7. Public publisher registration
 
-### 5.1. Registration flow
+### 7.1. Registration flow
 
 ```
 User                           cvcpkg-server                   Admin
@@ -257,7 +398,7 @@ User                           cvcpkg-server                   Admin
    enforceability depends on deployment.  For CVC internal use, admin
    approval alone suffices.
 
-### 5.2. Why admin review instead of fully automated?
+### 7.2. Why admin review instead of fully automated?
 
 - Supply-chain attack surface: automated signup lets an attacker
   claim names before legitimate publishers do.
@@ -268,7 +409,7 @@ User                           cvcpkg-server                   Admin
   membership check) in a future minor release if the review queue
   becomes a bottleneck.
 
-### 5.3. CLI registration helper
+### 7.3. CLI registration helper
 
 ```bash
 # Generate a keypair if the user doesn't have one:
@@ -287,16 +428,16 @@ cvcpkg identity status --server https://pkg.cvc.example.org
 
 ---
 
-## 6. Package name governance
+## 8. Package name governance
 
-### 6.1. Name reservation
+### 8.1. Name reservation
 
 The first time a publisher successfully publishes a package with a
 given name, a `PackageName` row is created with `owner_id` pointing
 to that publisher.  Subsequent publishes to the same name must come
 from the same publisher (or an admin).
 
-### 6.2. Admin controls
+### 8.2. Admin controls
 
 | Action | Endpoint | Who |
 |--------|----------|-----|
@@ -306,13 +447,13 @@ from the same publisher (or an admin).
 | List all names | `GET /v2/admin/names` | admin |
 | Revoke publisher | `POST /v2/admin/publishers/{id}/suspend` | admin |
 
-### 6.3. Proactive name blocking
+### 8.3. Proactive name blocking
 
 Before a release, admins can pre-reserve names for well-known
 upstream projects (boost, hdf5, vtk, qt6, etc.) so that no one can
 squat them.  The seed list is derived from `packaging/components.yaml`.
 
-### 6.4. Name policy rules (enforced server-side)
+### 8.4. Name policy rules (enforced server-side)
 
 - Names must match `^[a-z][a-z0-9_-]{0,63}$`.
 - Names that are substrings or close Levenshtein-distance matches of
@@ -322,9 +463,9 @@ squat them.  The seed list is derived from `packaging/components.yaml`.
 
 ---
 
-## 7. Cryptographic publisher identity
+## 9. Cryptographic publisher identity
 
-### 7.1. Key type
+### 9.1. Key type
 
 Ed25519 (via the `cryptography` package or `PyNaCl`).  Ed25519 is:
 
@@ -333,7 +474,7 @@ Ed25519 (via the `cryptography` package or `PyNaCl`).  Ed25519 is:
 - Widely supported (OpenSSH, GPG, sigstore, TUF).
 - No parameter choice risk (unlike RSA key sizes or EC curves).
 
-### 7.2. Signing flow
+### 9.2. Signing flow
 
 ```
 Publisher (cvcpkg CLI)           cvcpkg-server
@@ -354,7 +495,7 @@ Publisher (cvcpkg CLI)           cvcpkg-server
   │  ◄─ 201 { published }           │
 ```
 
-### 7.3. Key rotation
+### 9.3. Key rotation
 
 - A publisher can register a **new** public key via
   `POST /v2/publishers/{id}/keys` (authenticated, requires current
@@ -364,7 +505,7 @@ Publisher (cvcpkg CLI)           cvcpkg-server
 - Admins can force-rotate a publisher's key if compromise is
   suspected.
 
-### 7.4. Client-side verification
+### 9.4. Client-side verification
 
 On `cvcpkg install`, the client:
 
@@ -379,9 +520,9 @@ On `cvcpkg install`, the client:
 
 ---
 
-## 8. Publisher directory
+## 10. Publisher directory
 
-### 8.1. Public endpoints
+### 10.1. Public endpoints
 
 | Endpoint | Description |
 |----------|-------------|
@@ -390,7 +531,7 @@ On `cvcpkg install`, the client:
 | `GET /v2/publishers/{username}/packages` | All packages published by this publisher. |
 | `GET /v2/names/{name}` | Which publisher owns this package name + publishing history. |
 
-### 8.2. Data exposed
+### 10.2. Data exposed
 
 - Username, display name (optional).
 - Public key (PEM) and fingerprint.
@@ -405,9 +546,9 @@ What is **not** exposed:
 
 ---
 
-## 9. Admin revocation powers
+## 11. Admin revocation powers
 
-### 9.1. Credential revocation
+### 11.1. Credential revocation
 
 An admin can revoke a publisher's credentials at any time:
 
@@ -426,7 +567,7 @@ This:
 Re-enabling requires `POST /v2/admin/publishers/{id}/reinstate` +
 a new public key upload by the publisher.
 
-### 9.2. Name revocation
+### 11.2. Name revocation
 
 An admin can strip a publisher's ownership of a specific package name
 without suspending their entire account:
@@ -439,7 +580,7 @@ POST /v2/admin/names/{name}/block
 This blocks new publishes to that name by anyone until the admin
 explicitly transfers it or unblocks it.
 
-### 9.3. Artifact revocation
+### 11.3. Artifact revocation
 
 Individual releases can be deleted (hard) or yanked (soft):
 
@@ -452,12 +593,20 @@ Individual releases can be deleted (hard) or yanked (soft):
 
 ---
 
-## 10. Phased delivery plan
+## 12. Phased delivery plan
 
 ### Phase 0: prerequisite 1.x releases (v1.3.x – v1.4.x)
 
 Work that can ship under the 1.x line without breaking changes:
 
+- [ ] Formalize the filesystem catalog layout (`catalog.yaml` +
+      `archives/` + optional `.sig` files).
+- [ ] `cvcpkg push --dest <dir>` writes archives + regenerates
+      `catalog.yaml` in the target directory.
+- [ ] `cvcpkg install --catalog <dir>` resolves from a local
+      filesystem catalog without any network access.
+- [ ] Add S3 as a secondary CI publish target alongside GitHub
+      Releases to begin the migration off GitHub storage.
 - [ ] Harden the existing storage backend interface with retry logic
       and connection pooling.
 - [ ] Add `cvcpkg identity init` and local Ed25519 keypair management
@@ -525,7 +674,7 @@ Work that can ship under the 1.x line without breaking changes:
 
 ---
 
-## 11. New dependencies
+## 13. New dependencies
 
 | Package | Purpose | Version |
 |---------|---------|---------|
@@ -544,7 +693,7 @@ All database drivers except `aiosqlite` are optional extras:
 
 ---
 
-## 12. API versioning
+## 14. API versioning
 
 The v2 server mounts all new endpoints under `/v2/`.  The existing
 `/v1/` endpoints continue to work (backed by the same database) for
@@ -556,9 +705,9 @@ backward compatibility.  Deprecation timeline:
 
 ---
 
-## 13. Deployment considerations
+## 15. Deployment considerations
 
-### 13.1. Single-node (lab / small team)
+### 15.1. Single-node (lab / small team)
 
 ```bash
 pip install cvcpkg[server]
@@ -568,7 +717,7 @@ cvcpkg-server run --database sqlite:///var/lib/cvcpkg/cvcpkg.db
 SQLite mode — zero external dependencies.  Suitable for ≤5 publishers,
 ≤500 packages.
 
-### 13.2. Production (multi-node)
+### 15.2. Production (multi-node)
 
 ```yaml
 # docker-compose.yml sketch
@@ -589,16 +738,35 @@ services:
       replicas: 3
 ```
 
-### 13.3. Air-gapped / offline
+### 15.3. Filesystem-only (no daemon, no network)
+
+```bash
+# Build and publish to a shared directory:
+cvcpkg build-all --recipes-dir recipes --prefix /tmp/build \
+  --platform linux --config release --link shared
+cvcpkg pack-all --prefix /tmp/build --recipes-dir recipes --dist /tmp/dist
+cvcpkg push /tmp/dist/*.tar.gz --dest /shared/cvcpkg-repo
+
+# Consumers install from the directory:
+cvcpkg install --catalog /shared/cvcpkg-repo --prefix ./deps boost hdf5
+```
+
+No daemon, no database, no network.  The shared directory can live
+on NFS, a USB drive, or a local path.  This is the simplest
+deployment and will always be supported.
+
+### 15.4. Air-gapped / offline
 
 An operator runs `cvcpkg mirror sync --from https://pkg.cvc.example.org
 --to file:///mnt/packages` on an internet-connected machine, then
 transfers the local directory to the air-gapped network.  The
-air-gapped server serves from `file://` backend.
+air-gapped server serves from `file://` backend.  Alternatively,
+the operator can skip the daemon entirely and point consumers at
+the synced directory with `--catalog /mnt/packages`.
 
 ---
 
-## 14. Security model summary
+## 16. Security model summary
 
 | Threat | Mitigation |
 |--------|------------|
@@ -615,7 +783,7 @@ air-gapped server serves from `file://` backend.
 
 ---
 
-## 15. Open questions
+## 17. Open questions
 
 1. **OAuth / OIDC integration**: Should we support "Log in with GitHub"
    for publisher registration?  This would let us auto-verify GitHub
