@@ -187,9 +187,7 @@ def install_entry(
             ki = verify_file(archive, sig, keys_dir)
             print(f"cvcpkg: signature verified for {entry.name} (key: {ki.label})")
         except SigningError as e:
-            raise IntegrityError(
-                f"Signature verification failed for {entry.name}: {e}"
-            ) from e
+            raise IntegrityError(f"Signature verification failed for {entry.name}: {e}") from e
 
     extract_bundle(archive, prefix)
     return archive

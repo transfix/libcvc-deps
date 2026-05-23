@@ -230,7 +230,9 @@ class TestCLI:
         from cvcpkg.cli import cli
 
         runner = CliRunner()
-        result = runner.invoke(cli, ["key", "generate", "--label", "ci", "--keys-dir", str(keys_dir)])
+        result = runner.invoke(
+            cli, ["key", "generate", "--label", "ci", "--keys-dir", str(keys_dir)]
+        )
         assert result.exit_code == 0
         assert "Generated key" in result.output
         assert (keys_dir / "ci.key").is_file()
@@ -251,7 +253,9 @@ class TestCLI:
 
         generate_keypair("exp", keys_dir=keys_dir)
         runner = CliRunner()
-        result = runner.invoke(cli, ["key", "export", "--label", "exp", "--keys-dir", str(keys_dir)])
+        result = runner.invoke(
+            cli, ["key", "export", "--label", "exp", "--keys-dir", str(keys_dir)]
+        )
         assert result.exit_code == 0
         assert "BEGIN PUBLIC KEY" in result.output
 
@@ -266,19 +270,29 @@ class TestCLI:
         runner = CliRunner()
 
         # Sign
-        result = runner.invoke(cli, [
-            "sign", str(test_file),
-            "--signing-key", str(keys_dir / "signer.key"),
-        ])
+        result = runner.invoke(
+            cli,
+            [
+                "sign",
+                str(test_file),
+                "--signing-key",
+                str(keys_dir / "signer.key"),
+            ],
+        )
         assert result.exit_code == 0
         assert "Signed:" in result.output
         assert test_file.with_suffix(".gz.sig").is_file()
 
         # Verify
-        result = runner.invoke(cli, [
-            "verify-sig", str(test_file),
-            "--keys-dir", str(keys_dir),
-        ])
+        result = runner.invoke(
+            cli,
+            [
+                "verify-sig",
+                str(test_file),
+                "--keys-dir",
+                str(keys_dir),
+            ],
+        )
         assert result.exit_code == 0
         assert "Verified:" in result.output
 
@@ -294,11 +308,18 @@ class TestCLI:
         dest_dir.mkdir()
 
         runner = CliRunner()
-        result = runner.invoke(cli, [
-            "key", "import", str(pub_file),
-            "--label", "remote",
-            "--keys-dir", str(dest_dir),
-        ])
+        result = runner.invoke(
+            cli,
+            [
+                "key",
+                "import",
+                str(pub_file),
+                "--label",
+                "remote",
+                "--keys-dir",
+                str(dest_dir),
+            ],
+        )
         assert result.exit_code == 0
         assert "Imported" in result.output
         assert (dest_dir / "remote.pub").is_file()

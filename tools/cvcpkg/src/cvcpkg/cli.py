@@ -1111,7 +1111,12 @@ def build(
 @_keep_build_opt
 @_recipes_dir_opt
 @_maintainer_opt
-@click.option("--signing-key", type=click.Path(exists=True), default=None, help="Path to Ed25519 private key to sign archives.")
+@click.option(
+    "--signing-key",
+    type=click.Path(exists=True),
+    default=None,
+    help="Path to Ed25519 private key to sign archives.",
+)
 def pack(
     recipe: tuple[str, ...],
     platform: str,
@@ -1222,7 +1227,12 @@ def build_all_cmd(
 @_keep_build_opt
 @_recipes_dir_opt
 @_maintainer_opt
-@click.option("--signing-key", type=click.Path(exists=True), default=None, help="Path to Ed25519 private key to sign archives.")
+@click.option(
+    "--signing-key",
+    type=click.Path(exists=True),
+    default=None,
+    help="Path to Ed25519 private key to sign archives.",
+)
 def pack_all_cmd(
     platform: str,
     config: str,
@@ -1491,7 +1501,12 @@ def key_export(label: str, keys_dir: str | None) -> None:
 
 @cli.command()
 @click.argument("archive", type=click.Path(exists=True))
-@click.option("--signing-key", required=True, type=click.Path(exists=True), help="Path to Ed25519 private key (.key).")
+@click.option(
+    "--signing-key",
+    required=True,
+    type=click.Path(exists=True),
+    help="Path to Ed25519 private key (.key).",
+)
 @click.option("--password", default=None, help="Password for the signing key.")
 def sign(archive: str, signing_key: str, password: str | None) -> None:
     """Sign an archive file.

@@ -390,6 +390,5 @@ def _verify_digest(
             continue
 
     raise SigningError(
-        f"No trusted key verified the signature "
-        f"(fingerprint: {sig.key_fingerprint[:16]}…)"
+        f"No trusted key verified the signature " f"(fingerprint: {sig.key_fingerprint[:16]}…)"
     )
