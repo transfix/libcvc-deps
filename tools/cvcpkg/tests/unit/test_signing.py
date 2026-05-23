@@ -26,7 +26,6 @@ from cvcpkg.signing import (
 )
 from cvcpkg.errors import SigningError
 
-
 # ── Fixtures ────────────────────────────────────────────────────
 
 

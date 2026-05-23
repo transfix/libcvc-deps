@@ -25,7 +25,6 @@ from pathlib import Path
 
 from cvcpkg.errors import SigningError
 
-
 # ── Key fingerprinting ──────────────────────────────────────────
 
 
