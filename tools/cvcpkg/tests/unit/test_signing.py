@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+
 import pytest
 from pathlib import Path
 
@@ -60,6 +62,7 @@ class TestKeyGeneration:
         assert info.has_private is True
         assert info.label == "mykey"
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="Windows has no POSIX perms")
     def test_private_key_permissions(self, keys_dir: Path) -> None:
         generate_keypair("sec", keys_dir=keys_dir)
         mode = (keys_dir / "sec.key").stat().st_mode & 0o777
