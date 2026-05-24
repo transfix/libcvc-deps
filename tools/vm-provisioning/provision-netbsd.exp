@@ -1,0 +1,372 @@
+#!/usr/bin/expect -f
+#
+# Fully automated NetBSD 10.1 VM provisioning on Incus.
+# Creates the VM, downloads and attaches the ISO, runs the installer,
+# fixes post-install config (serial console, sshd, DHCP), sets the
+# root password, removes the ISO, and installs build tools.
+#
+# NetBSD requires a multi-phase approach because:
+#   1. The curses-based installer can't reliably set all post-install config
+#   2. The ISO boots to a read-only cd9660 root (need tmpfs for scratch)
+#   3. Password hashes must be argon2id (bcrypt doesn't work for login)
+#
+# Usage:
+#   expect provision-netbsd.exp [VM_NAME] [TARGET_NODE] [ISO_PATH]
+#
+# Examples:
+#   expect provision-netbsd.exp
+#   expect provision-netbsd.exp netbsd-test star-00
+#   expect provision-netbsd.exp netbsd-test star-00 /tmp/netbsd.iso
+#
+# Defaults: VM=netbsd-build, target=unset, ISO downloaded if missing
+#
+
+# --- Configuration ---
+set vm_name   [lindex $argv 0]
+set target    [lindex $argv 1]
+set iso_path  [lindex $argv 2]
+
+if {$vm_name eq ""} { set vm_name "netbsd-build" }
+if {$iso_path eq ""} { set iso_path "/tmp/netbsd.iso" }
+
+set iso_url "https://cdn.NetBSD.org/pub/NetBSD/NetBSD-10.1/images/NetBSD-10.1-amd64.iso"
+set root_pass "build1234567"
+
+puts "=== Provisioning NetBSD VM: $vm_name ==="
+
+# --- Download ISO if needed ---
+if {![file exists $iso_path]} {
+    puts "\[1/8\] Downloading NetBSD 10.1 ISO ..."
+    set rc [catch {exec curl -sL -o $iso_path $iso_url} msg]
+    if {$rc != 0} {
+        puts "ERROR: Failed to download ISO: $msg"
+        exit 1
+    }
+} else {
+    puts "\[1/8\] Using existing ISO: $iso_path"
+}
+
+# --- Create VM ---
+puts "\[2/8\] Creating VM ..."
+set init_cmd "incus init $vm_name --vm --empty -c limits.cpu=4 -c limits.memory=4GiB -c security.secureboot=false -d root,size=50GiB"
+if {$target ne ""} {
+    append init_cmd " --target $target"
+}
+set rc [catch {exec {*}$init_cmd} msg]
+if {$rc != 0} {
+    puts "ERROR: Failed to create VM: $msg"
+    exit 1
+}
+
+# Attach ISO
+exec incus config device add $vm_name install-iso disk source=$iso_path boot.priority=10
+
+# ============================================================
+# PHASE 1: Install base system from ISO
+# ============================================================
+puts "\[3/8\] Starting VM and running installer ..."
+
+exec incus start $vm_name
+sleep 3
+
+set timeout 300
+log_file -noappend /tmp/netbsd-provision.log
+
+spawn incus console $vm_name --force
+
+# Boot menu — SPACE stops the countdown timer
+expect {
+    "Choose an option" { send " " }
+    "Boot normally" { send " " }
+    "seconds" { send " " }
+    timeout { puts "TIMEOUT at boot menu"; exit 1 }
+}
+
+# Select option 3 (Drop to boot prompt) — need Return after digit
+sleep 1
+send "3\r"
+
+expect {
+    "help" { }
+    timeout { puts "TIMEOUT at boot prompt"; exit 1 }
+}
+
+# Switch serial console
+send "consdev com0\r"
+
+# CRITICAL: After consdev com0, the bootloader redraws its entire banner.
+# Wait for the new prompt to appear after the redraw.
+sleep 5
+expect {
+    "\n> " { }
+    "\r\n> " { }
+    timeout { puts "TIMEOUT after consdev"; exit 1 }
+}
+
+# Boot normally (enters the sysinst installer)
+send "boot\r"
+
+# Wait for terminal emulation prompt
+set timeout 300
+expect {
+    "terminal emulation" { }
+    "Terminal type" { }
+    timeout { puts "TIMEOUT terminal prompt"; exit 1 }
+}
+send "vt100\r"
+
+# Curses-based installer — timing-based sends (pattern matching unreliable)
+# Language: a = English
+sleep 10; send "a\r"
+# Main menu: a = Install NetBSD to hard disk
+sleep 10; send "a\r"
+# Shall we continue? b = Yes
+sleep 10; send "b\r"
+# Select disk: a = sd0
+sleep 10; send "a\r"
+# Partition type: a = GPT (required for EFI boot)
+sleep 10; send "a\r"
+# Partition sizing: b = Use default partition sizes (NOT "a" which is manual)
+sleep 10; send "b\r"
+# Accept partition sizes: x = Partition sizes ok
+sleep 10; send "x\r"
+# Last chance: b = Yes, install
+sleep 10; send "b\r"
+# Wait for formatting
+sleep 30
+# Distribution: a = Full installation
+send "a\r"
+# Install sets: x
+sleep 10; send "x\r"
+# Medium: a = CD-ROM
+sleep 10; send "a\r"
+
+# Wait for all distribution sets to be extracted (17 sets)
+set timeout 1200
+expect {
+    "Hit enter to continue" { }
+    -re "(?i)hit enter" { }
+    timeout { puts "TIMEOUT extraction"; exit 1 }
+}
+send "\r"
+
+# Post-install config menu: a=network b=timezone c=shell d=password
+#   e=binary_pkgs f=pkgsrc g=sshd h=ntpd o=add_user x=finish
+sleep 15
+# Configure network (DHCP)
+send "a\r"; sleep 8
+send "a\r"; sleep 5
+send "\r"; sleep 3; send "\r"; sleep 3; send "\r"; sleep 3
+send "\r"; sleep 3; send "\r"; sleep 3; send "\r"; sleep 3
+# Set root password
+send "d\r"; sleep 5
+expect { "New password:" {} -re "(?i)new password" {} timeout {} }
+send "$root_pass\r"; sleep 3
+expect { "Retype new password:" {} -re "(?i)retype" {} timeout {} }
+send "$root_pass\r"; sleep 5
+# Enable sshd
+send "g\r"; sleep 5
+# Finish
+send "x\r"; sleep 10; send "\r"; sleep 10
+# Reboot
+send "d\r"
+
+puts "\n\[4/8\] Base installation complete."
+
+# The reboot kills the console connection — wait for spawn to die
+sleep 10
+catch {send "\x01q"}
+catch {expect eof}
+catch {wait}
+sleep 5
+
+# ============================================================
+# PHASE 2: Rescue boot from ISO to fix post-install config
+# ============================================================
+puts "\[5/8\] Running post-install config fix via ISO rescue ..."
+
+catch {exec incus stop $vm_name --force}
+sleep 5
+exec incus start $vm_name
+sleep 3
+
+spawn incus console $vm_name --force
+
+# Boot menu — stop countdown
+expect {
+    "Choose an option" { send " " }
+    "Boot normally" { send " " }
+    "seconds" { send " " }
+    timeout { puts "TIMEOUT at boot menu (phase 2)"; exit 1 }
+}
+
+# Drop to boot prompt
+sleep 1; send "3\r"
+expect { "help" {} timeout { puts "TIMEOUT boot prompt (phase 2)"; exit 1 } }
+
+# Serial console
+send "consdev com0\r"
+sleep 5
+expect { "\n> " {} "\r\n> " {} timeout { puts "TIMEOUT consdev (phase 2)"; exit 1 } }
+
+# Boot single-user from ISO
+send "boot -s\r"
+
+set timeout 300
+expect {
+    "Enter pathname of shell" { send "\r"; sleep 3 }
+    timeout { puts "TIMEOUT shell (phase 2)"; exit 1 }
+}
+expect { -re "\n# $" {} -re "\r\n# " {} "# " {} timeout { puts "TIMEOUT prompt"; exit 1 } }
+
+# Writable scratch space (ISO root is read-only cd9660)
+send "mount -t tmpfs tmpfs /tmp\r"; expect "# "; sleep 1
+
+# fsck and mount installed root
+send "fsck -y /dev/dk1\r"; expect "# "; sleep 5
+send "mount /dev/dk1 /mnt\r"; expect "# "; sleep 2
+
+# --- Serial console in bootloader ---
+send "cat > /mnt/boot.cfg << 'EOF'\r"; expect "> "
+send "menu=Boot normally:rndseed /var/db/entropy-file;boot\r"; expect "> "
+send "menu=Boot single user:rndseed /var/db/entropy-file;boot -s\r"; expect "> "
+send "menu=Drop to boot prompt:prompt\r"; expect "> "
+send "default=1\r"; expect "> "
+send "timeout=5\r"; expect "> "
+send "consdev=com0,115200\r"; expect "> "
+send "EOF\r"; expect "# "; sleep 1
+
+# --- rc.conf (sshd + DHCP) ---
+send "cat > /mnt/etc/rc.conf << 'EOF'\r"; expect "> "
+send "rc_configured=YES\r"; expect "> "
+send "hostname=$vm_name\r"; expect "> "
+send "sshd=YES\r"; expect "> "
+send "dhcpcd=YES\r"; expect "> "
+send "ntpd=NO\r"; expect "> "
+send "EOF\r"; expect "# "; sleep 1
+
+# --- DHCP for vioif0 ---
+send "echo 'dhcp' > /mnt/etc/ifconfig.vioif0\r"; expect "# "; sleep 1
+
+# --- Serial getty on tty00 ---
+send {sed -i 's|^tty00.*|tty00 "/usr/libexec/getty std.115200" vt100 on secure|' /mnt/etc/ttys}
+send "\r"; expect "# "; sleep 1
+
+# --- sshd config ---
+send "cat >> /mnt/etc/ssh/sshd_config << 'EOF'\r"; expect "> "
+send "PermitRootLogin yes\r"; expect "> "
+send "EOF\r"; expect "# "; sleep 1
+
+# Sync and unmount
+send "sync; sync\r"; expect "# "; sleep 3
+send "umount /mnt\r"; expect "# "; sleep 1
+send "halt -p\r"
+
+puts "\n\[6/8\] Post-install config fix complete."
+
+# The halt kills the spawn — wait for it to die
+sleep 10
+catch {send "\x01q"}
+catch {expect eof}
+catch {wait}
+sleep 5
+
+# ============================================================
+# PHASE 3: Boot from disk in single-user to set password
+# ============================================================
+puts "\[7/8\] Setting root password (must use native passwd for argon2id) ..."
+
+catch {exec incus stop $vm_name --force}
+sleep 3
+# Remove the ISO so it boots from disk
+catch {exec incus config device remove $vm_name install-iso}
+sleep 1
+exec incus start $vm_name
+sleep 3
+
+spawn incus console $vm_name --force
+
+# Boot menu — pick single-user (option 2 from disk boot.cfg)
+expect {
+    "Choose an option" { send " " }
+    "Boot normally" { send " " }
+    "seconds" { send " " }
+    timeout { puts "TIMEOUT boot menu (phase 3)"; exit 1 }
+}
+sleep 1; send "2\r"
+
+set timeout 300
+expect {
+    "Enter pathname of shell" { send "\r"; sleep 3 }
+    timeout { puts "TIMEOUT shell (phase 3)"; exit 1 }
+}
+expect { "# " {} timeout { puts "TIMEOUT prompt (phase 3)"; exit 1 } }
+
+# Mount root read-write
+send "mount -o rw /\r"; expect "# "; sleep 1
+
+# Set password with native passwd (generates argon2id)
+send "passwd root\r"
+expect { "New Password:" { send "$root_pass\r" } "New password:" { send "$root_pass\r" } timeout { puts "TIMEOUT passwd"; exit 1 } }
+expect { "Retype New Password:" { send "$root_pass\r" } "Retype new password:" { send "$root_pass\r" } timeout { puts "TIMEOUT retype"; exit 1 } }
+expect "# "; sleep 1
+
+# Continue to multi-user
+send "exit\r"; sleep 2
+
+set timeout 120
+expect {
+    "login:" { puts "\nMulti-user mode reached!" }
+    timeout { puts "\nTimeout waiting for login" }
+}
+
+puts "\n\[8/8\] Installing build tools ..."
+
+# Detach and wait for networking
+send "\x01q"
+sleep 30
+
+# Find IP
+set ip ""
+for {set i 0} {$i < 30} {incr i} {
+    set raw [exec incus list $vm_name -f csv -c 4]
+    if {[regexp {(\d+\.\d+\.\d+\.\d+)} $raw match ip]} {
+        break
+    }
+    sleep 5
+}
+
+if {$ip eq ""} {
+    puts "WARNING: Could not find VM IP, skipping tool install."
+    puts "Install tools manually via SSH."
+} else {
+    # SSH in and install tools
+    spawn ssh -o StrictHostKeyChecking=no -o PubkeyAuthentication=no root@$ip
+    expect "assword"
+    send "$root_pass\r"
+    expect "# "
+
+    set timeout 600
+    send "export PATH=/usr/sbin:/sbin:/usr/pkg/sbin:\$PATH\r"
+    expect "# "
+    send "export PKG_PATH='https://cdn.NetBSD.org/pub/pkgsrc/packages/NetBSD/amd64/10.1/All'\r"
+    expect "# "
+    send "pkg_add pkgin 2>/dev/null; pkgin -y update\r"
+    expect "# "
+    send "pkgin -y install cmake git ninja-build pkgconf curl wget gmake autoconf automake libtool python313 gcc14 llvm clang\r"
+    expect "# "
+    sleep 2
+
+    send "uname -sr; cmake --version | head -1; git --version; python3.13 --version\r"
+    expect "# "
+    sleep 1
+
+    send "exit\r"
+    expect eof
+}
+
+puts ""
+puts "=== NetBSD VM ready ==="
+puts "  Name:   $vm_name"
+puts "  IP:     $ip"
+puts "  SSH:    ssh root@$ip (password: $root_pass)"
