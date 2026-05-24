@@ -28,6 +28,22 @@ Incus cluster hosting BSD virtual machines for cross-platform building with the 
 | **Disk (Incus)** | 50 GiB | 50 GiB | 50 GiB |
 | **Disk (Guest)** | 47G avail (ZFS expanded) | ~5G partitioned (40G+ free) | 5.8G partitioned (40G+ free) |
 
+### HaikuOS VM
+
+| Property | Value |
+|---|---|
+| **VM Name** | haiku-build |
+| **OS Version** | HaikuOS R1/beta5 (x86_64) |
+| **Host Node** | star-00 |
+| **IP Address** | (discover via VGA console `ifconfig`) |
+| **vCPUs** | 4 |
+| **Memory** | 4 GiB |
+| **Disk (Incus)** | 50 GiB |
+| **Console** | VGA only (`incus console haiku-build --type=vga`) |
+| **SSH User** | user (password set via VGA Terminal) |
+| **Package Mgr** | pkgman (HaikuPorts) |
+| **Notes** | No Incus agent; no serial console; graphical install required |
+
 ### Validation VMs (created to test provisioning scripts)
 
 | | FreeBSD | OpenBSD | NetBSD |
@@ -78,3 +94,5 @@ All scripts are in `libcvc-deps/tools/vm-provisioning/`:
 | `setup-freebsd-tools.sh` | Install FreeBSD build toolchain |
 | `setup-openbsd-tools.sh` | Install OpenBSD build toolchain |
 | `setup-netbsd-tools.sh` | Install NetBSD build toolchain |
+| `provision-haiku.sh` | Create HaikuOS VM, download ISO, boot live system (manual graphical install) |
+| `setup-haiku-tools.sh` | Install HaikuOS build toolchain (pkgman) |

@@ -1,10 +1,11 @@
-# BSD VM Provisioning Scripts
+# VM Provisioning Scripts
 
-Automated provisioning scripts for creating BSD build VMs on an Incus cluster.
+Automated provisioning scripts for creating build VMs on an Incus cluster.
 Each script is fully self-contained: it creates the VM, installs the OS,
 configures networking/SSH, and installs the build toolchain.
 
 These VMs are used for cross-platform building with the libcvc-deps/cvcpkg system.
+Supported platforms: FreeBSD, OpenBSD, NetBSD, and HaikuOS.
 
 ## Prerequisites
 
@@ -40,6 +41,11 @@ expect provision-openbsd.exp openbsd-test star-01   # named VM on specific node
 expect provision-netbsd.exp [VM_NAME] [TARGET_NODE] [ISO_PATH]
 expect provision-netbsd.exp                         # netbsd-build, downloads ISO
 expect provision-netbsd.exp netbsd-test star-00     # named VM on specific node
+
+# HaikuOS — hybrid: automated VM creation + manual graphical install + automated tools
+bash provision-haiku.sh [VM_NAME] [TARGET_NODE] [ISO_PATH]
+bash provision-haiku.sh                             # haiku-build on any node
+bash provision-haiku.sh --post-install haiku-build 10.99.0.50  # post-install with IP
 ```
 
 ## VM Defaults
@@ -58,6 +64,7 @@ expect provision-netbsd.exp netbsd-test star-00     # named VM on specific node
 | freebsd-build | FreeBSD 14.4 | `incus exec` (no password) | cmake, clang 19, gcc14, ninja, python3, autotools |
 | openbsd-build | OpenBSD 7.7 | root/build123, user builder/build123 | cmake, clang 16, GCC 11, ninja, python3, autotools |
 | netbsd-build | NetBSD 10.1 | root/build1234567 | cmake 4.2, clang 19, gcc14, ninja, python 3.13, autotools |
+| haiku-build | HaikuOS R1/beta5 | user (set password via VGA) | cmake, gcc, clang 18, ninja, python3.11, autotools |
 
 ## Scripts
 
@@ -68,6 +75,7 @@ expect provision-netbsd.exp netbsd-test star-00     # named VM on specific node
 | `provision-freebsd.sh` | Create FreeBSD VM from cloud image + install tools |
 | `provision-openbsd.exp` | Create VM, download ISO, install OpenBSD, install tools |
 | `provision-netbsd.exp` | Create VM, download ISO, install NetBSD (3 phases), install tools |
+| `provision-haiku.sh` | Create VM, download ISO, boot live system (manual graphical install required), post-install SSH+tools |
 
 ### Standalone (for manual use or re-running individual steps)
 
@@ -80,6 +88,7 @@ expect provision-netbsd.exp netbsd-test star-00     # named VM on specific node
 | `setup-freebsd-tools.sh` | Install FreeBSD build toolchain |
 | `setup-openbsd-tools.sh` | Install OpenBSD build toolchain |
 | `setup-netbsd-tools.sh` | Install NetBSD build toolchain |
+| `setup-haiku-tools.sh` | Install HaikuOS build toolchain (pkgman) |
 
 ## Key Lessons Learned
 
@@ -91,3 +100,4 @@ expect provision-netbsd.exp netbsd-test star-00     # named VM on specific node
 - **NetBSD password**: Uses argon2id by default; externally-generated bcrypt ($2b$) hashes don't work; use `passwd` in single-user mode
 - **FreeBSD**: Cloud images from linuxcontainers.org work out of the box — no ISO or installer needed
 - **TCL/expect escaping**: Use `{...}` braces around shell commands with `$`, `[`, `]` to prevent TCL substitution
+- **HaikuOS**: No serial console installer — must use VGA console (SPICE) for graphical install; no Incus agent so IP must be discovered via ARP or manual `ifconfig`; virtio-net NIC may need manual DHCP (`ifconfig /dev/net/virtio_net/0 auto`); ISO must be the `anyboot` variant; OSUOSL mirror is reliable (`ftp.osuosl.org`); default user is "user" with empty password
