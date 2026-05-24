@@ -4,9 +4,13 @@
 #
 # Unlike the BSDs, Haiku uses a graphical installer — there is no text-mode
 # or serial console installer. This script handles:
-#   Phase 1: VM creation, ISO download, boot from ISO (automated)
+#   Phase 1: VM creation, ISO download, write to disk, boot (automated)
 #   Phase 2: Graphical installation via VGA console (MANUAL — user required)
 #   Phase 3: Post-install SSH + build tools setup (automated)
+#
+# NOTE: Haiku R1/beta5 does not support virtio-scsi, so this script uses
+# virtio-blk for disk I/O and writes the anyboot ISO directly to root.img
+# instead of attaching it as a separate Incus disk device.
 #
 # Usage:
 #   bash provision-haiku.sh [VM_NAME] [TARGET_NODE] [ISO_PATH]
@@ -21,13 +25,12 @@
 # After running this script:
 #   1. Connect to VGA console:  incus console VM_NAME --type=vga
 #      (opens a SPICE viewer — install virt-viewer/remote-viewer)
-#   2. In the Haiku live desktop, open "Installer" from the Desktop
-#   3. Open DriveSetup, initialize the target disk (GUID Partition Map)
-#   4. Create a BFS partition, format it
-#   5. Close DriveSetup, select source & destination, click "Begin"
-#   6. After install completes, click "Restart"
-#   7. Once rebooted from disk, run:
-#        bash provision-haiku.sh --post-install VM_NAME
+#   2. In the Haiku live desktop, open Installer
+#   3. Open DriveSetup, create BFS partition in the free space (~48GB)
+#   4. Close DriveSetup, select source & destination, click "Begin"
+#   5. After install completes, click "Restart"
+#   6. Configure networking and SSH from Haiku Terminal
+#   7. Run: bash provision-haiku.sh --post-install VM_NAME <IP>
 #
 set -euo pipefail
 
@@ -129,16 +132,16 @@ TOOLS_EOF
 fi
 
 # ===========================================================================
-# PHASE 1: Create VM and boot from ISO
+# PHASE 1: Create VM, write ISO to disk, and boot
 # ===========================================================================
 echo "=== Provisioning HaikuOS VM: ${VM_NAME} ==="
 
 # --- Download ISO if needed ---
 if [ ! -f "$ISO_PATH" ]; then
-    echo "[1/3] Downloading Haiku R1/beta5 ISO ..."
+    echo "[1/5] Downloading Haiku R1/beta5 ISO ..."
     curl -sL -o "$ISO_PATH" "$ISO_URL"
 else
-    echo "[1/3] Using existing ISO: $ISO_PATH"
+    echo "[1/5] Using existing ISO: $ISO_PATH"
 fi
 
 # Verify ISO size (should be ~1.4GB)
@@ -160,12 +163,14 @@ fi
 echo "  Checksum OK"
 
 # --- Create VM ---
-echo "[2/3] Creating VM ..."
+echo "[2/5] Creating VM ..."
 TARGET_ARG=""
 if [ -n "${TARGET:-}" ]; then
     TARGET_ARG="--target $TARGET"
 fi
 
+# CRITICAL: Haiku R1/beta5 does not support virtio-scsi (kernel panic).
+# We must use virtio-blk for the root disk (io.bus=virtio-blk).
 incus init "$VM_NAME" --vm --empty \
     -c limits.cpu=4 \
     -c limits.memory=4GiB \
@@ -173,17 +178,52 @@ incus init "$VM_NAME" --vm --empty \
     -d root,size=50GiB \
     $TARGET_ARG
 
-# Attach ISO as boot device
-incus config device add "$VM_NAME" install-iso disk \
-    source="$ISO_PATH" boot.priority=10
+incus config device set "$VM_NAME" root io.bus=virtio-blk
+
+# --- Write ISO to root disk ---
+# Haiku's kernel lacks virtio-scsi drivers, so attaching the ISO as a
+# separate Incus disk device does not work (the kernel cannot read it).
+# Instead, we DD the anyboot ISO directly to root.img and convert the
+# partition table from MBR to GPT for UEFI boot.
+echo "[3/5] Writing ISO to root disk ..."
+
+# Determine root.img path (requires running on or having access to the
+# target node's filesystem)
+LOCATION=$(incus info "$VM_NAME" | grep "^Location:" | awk '{print $2}')
+POOL_PATH="/var/lib/incus/storage-pools/default/virtual-machines/${VM_NAME}"
+ROOT_IMG="${POOL_PATH}/root.img"
+
+if [ "$(hostname)" = "$LOCATION" ]; then
+    # Running on the target node
+    sudo dd if="$ISO_PATH" of="$ROOT_IMG" bs=4M conv=notrunc status=progress
+    echo "[4/5] Converting partition table to GPT ..."
+    sudo sgdisk -g "$ROOT_IMG"
+else
+    echo "  VM is on node '$LOCATION' but we are on '$(hostname)'."
+    echo "  The ISO must be written on the target node."
+    echo ""
+    echo "  Copy the ISO to the target node and run:"
+    echo "    sudo dd if=<ISO_PATH> of=$ROOT_IMG bs=4M conv=notrunc status=progress"
+    echo "    sudo sgdisk -g $ROOT_IMG"
+    echo ""
+    echo "  Then start the VM:"
+    echo "    incus start $VM_NAME"
+    echo ""
+    echo "  Alternatively, re-run this script on node '$LOCATION'."
+    exit 0
+fi
 
 # --- Start VM ---
-echo "[3/3] Starting VM (boots from ISO into Haiku live desktop) ..."
+echo "[5/5] Starting VM (boots into Haiku live desktop) ..."
 incus start "$VM_NAME"
 
 echo ""
 echo "============================================================"
-echo "  HaikuOS VM created and booting from ISO."
+echo "  HaikuOS VM created and booting from disk."
+echo ""
+echo "  The anyboot ISO has been written to the root disk. Haiku will"
+echo "  boot into a live desktop from the 1.4GB BFS partition, with"
+echo "  ~48GB of free space available for a permanent installation."
 echo ""
 echo "  NEXT STEPS (graphical install required):"
 echo ""
@@ -192,32 +232,29 @@ echo "       incus console $VM_NAME --type=vga"
 echo "     (requires remote-viewer / virt-viewer installed)"
 echo ""
 echo "  2. In the Haiku live desktop:"
-echo "     a. The Installer window should appear automatically"
+echo "     a. Open Installer (should appear automatically)"
 echo "     b. Click 'Set up partitions...' to open DriveSetup"
-echo "     c. Select the ~50GB QEMU HARDDISK → Disk → Initialize → GUID"
-echo "     d. Select the raw partition → Partition → Create → BFS"
+echo "     c. Select the free space on the disk"
+echo "     d. Create a new BFS partition (use all remaining space)"
 echo "     e. Close DriveSetup"
-echo "     f. In Installer: select source (Haiku) and target (your partition)"
+echo "     f. In Installer: select source and target partition"
 echo "     g. Click 'Begin' and wait for installation"
 echo "     h. Click 'Restart' when done"
 echo ""
-echo "  3. After reboot, remove the ISO and enable SSH:"
-echo "       incus stop $VM_NAME --force"
-echo "       incus config device remove $VM_NAME install-iso"
-echo "       incus start $VM_NAME"
-echo "     Then via VGA console, open Terminal and run:"
+echo "  3. Configure networking (after install or in live desktop):"
+echo "     In Haiku Terminal:"
+echo "       ifconfig /dev/net/virtio_net/0 up"
+echo "       ifconfig /dev/net/virtio_net/0 auto"
+echo "       ifconfig | grep 'inet addr'"
+echo ""
+echo "  4. Enable SSH:"
+echo "     In Haiku Terminal:"
 echo "       pkgman install openssh"
 echo "       ssh-keygen -A"
 echo "       /boot/system/bin/sshd"
 echo "       mkdir -p ~/config/settings/boot/launch"
 echo "       ln -sf /boot/system/bin/sshd ~/config/settings/boot/launch/"
 echo ""
-echo "  4. Configure networking (Haiku uses virtio-net but may need"
-echo "     manual DHCP configuration):"
-echo "     In Haiku Terminal: ifconfig /dev/net/virtio_net/0 up"
-echo "     Then: ifconfig /dev/net/virtio_net/0 auto"
-echo "     Verify: ifconfig | grep 'inet addr'"
-echo ""
-echo "  5. Enable SSH and install build tools:"
+echo "  5. Install build tools automatically:"
 echo "       bash provision-haiku.sh --post-install $VM_NAME <IP>"
 echo "============================================================"
