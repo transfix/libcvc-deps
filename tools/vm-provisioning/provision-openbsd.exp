@@ -28,15 +28,21 @@ set root_pass "build123"
 set user_name "builder"
 set user_pass "build123"
 
+# Helper: abort with message
+proc die {msg} {
+    puts "FATAL: $msg"
+    exit 1
+}
+
 puts "=== Provisioning OpenBSD VM: $vm_name ==="
 
 # --- Download ISO if needed ---
 if {![file exists $iso_path]} {
     puts "\[1/6\] Downloading OpenBSD 7.7 ISO ..."
-    set rc [catch {exec curl -sL -o $iso_path $iso_url} msg]
+    set rc [catch {exec curl -fSL -o $iso_path $iso_url} msg]
     if {$rc != 0} {
-        puts "ERROR: Failed to download ISO: $msg"
-        exit 1
+        catch {file delete $iso_path}
+        die "Failed to download ISO: $msg"
     }
 } else {
     puts "\[1/6\] Using existing ISO: $iso_path"
@@ -50,8 +56,7 @@ if {$target ne ""} {
 }
 set rc [catch {exec {*}$init_cmd} msg]
 if {$rc != 0} {
-    puts "ERROR: Failed to create VM: $msg"
-    exit 1
+    die "Failed to create VM: $msg"
 }
 
 # Attach ISO
@@ -62,128 +67,218 @@ puts "\[3/6\] Starting VM and running installer ..."
 exec incus start $vm_name
 sleep 5
 
-# --- Run installer ---
-set timeout 60
-log_file -noappend /tmp/openbsd-provision.log
+# --- Run installer via serial console ---
+set timeout 120
+log_file -noappend /tmp/openbsd-provision-$vm_name.log
 
 spawn incus console $vm_name --force
 
-expect "boot>"
+expect {
+    "boot>" { }
+    timeout { die "TIMEOUT waiting for boot prompt" }
+}
 sleep 0.3
 send "set tty com0\r"
 
-expect "boot>"
+expect {
+    "boot>" { }
+    timeout { die "TIMEOUT after set tty" }
+}
 sleep 0.3
 send "boot\r"
 
 set timeout 180
-expect "(I)nstall"
+expect {
+    "(I)nstall" { }
+    timeout { die "TIMEOUT waiting for installer menu" }
+}
 send "I\r"
 
-expect "Terminal type"
+set timeout 60
+expect {
+    "Terminal type" { }
+    timeout { die "TIMEOUT at terminal type" }
+}
 send "vt220\r"
 
-expect "System hostname"
+expect {
+    "System hostname" { }
+    timeout { die "TIMEOUT at hostname" }
+}
 send "$vm_name\r"
 
-expect "Network interface to configure"
+expect {
+    "Network interface to configure" { }
+    timeout { die "TIMEOUT at network interface" }
+}
 send "vio0\r"
 
-expect "IPv4 address"
+expect {
+    "IPv4 address" { }
+    timeout { die "TIMEOUT at IPv4" }
+}
 send "autoconf\r"
 
-expect "IPv6 address"
+expect {
+    "IPv6 address" { }
+    timeout { die "TIMEOUT at IPv6" }
+}
 send "none\r"
 
-expect "Network interface to configure"
+expect {
+    "Network interface to configure" { }
+    timeout { die "TIMEOUT at network done" }
+}
 send "done\r"
 
-expect "Password for root"
+expect {
+    "Password for root" { }
+    timeout { die "TIMEOUT at root password" }
+}
 send "$root_pass\r"
 
-expect "Password for root"
+expect {
+    "Password for root" { }
+    timeout { die "TIMEOUT at root password confirm" }
+}
 send "$root_pass\r"
 
-expect "sshd"
+expect {
+    "sshd" { }
+    timeout { die "TIMEOUT at sshd" }
+}
 send "yes\r"
 
-expect -re "X Window|xenodm"
+expect {
+    -re "X Window|xenodm" { }
+    timeout { die "TIMEOUT at X Window" }
+}
 send "no\r"
 
-expect "console to com0"
+expect {
+    "console to com0" { }
+    timeout { die "TIMEOUT at console com0" }
+}
 send "yes\r"
 
-expect "speed should com0"
+expect {
+    "speed should com0" { }
+    timeout { die "TIMEOUT at com0 speed" }
+}
 send "115200\r"
 
 # Note: "build" is a reserved username on OpenBSD — use "builder"
-expect "Setup a user"
+expect {
+    "Setup a user" { }
+    timeout { die "TIMEOUT at setup user" }
+}
 send "$user_name\r"
 
-expect "Full name"
+expect {
+    "Full name" { }
+    timeout { die "TIMEOUT at full name" }
+}
 send "Builder\r"
 
-expect "Password"
+expect {
+    "Password" { }
+    timeout { die "TIMEOUT at user password" }
+}
 send "$user_pass\r"
 
-expect "Password"
+expect {
+    "Password" { }
+    timeout { die "TIMEOUT at user password confirm" }
+}
 send "$user_pass\r"
 
-expect "root ssh login"
+expect {
+    "root ssh login" { }
+    timeout { die "TIMEOUT at root ssh login" }
+}
 send "yes\r"
 
-expect "timezone"
+expect {
+    "timezone" { }
+    timeout { die "TIMEOUT at timezone" }
+}
 send "UTC\r"
 
-expect "Which disk"
+expect {
+    "Which disk" { }
+    timeout { die "TIMEOUT at disk selection" }
+}
 send "sd0\r"
 
-# Encrypt root disk? No (press Enter for default)
-expect "Encrypt the root"
+expect {
+    "Encrypt the root" { }
+    timeout { die "TIMEOUT at encrypt" }
+}
 send "\r"
 
-# Use GPT for EFI boot (required for Incus VMs)
-expect -re "\\(W\\)hole|\\(G\\)PT|MBR"
+expect {
+    -re "\\(W\\)hole|\\(G\\)PT|MBR" { }
+    timeout { die "TIMEOUT at partition scheme" }
+}
 send "G\r"
 
-# Auto layout
-expect -re "\\(A\\)uto|layout"
+expect {
+    -re "\\(A\\)uto|layout" { }
+    timeout { die "TIMEOUT at layout" }
+}
 send "A\r"
 
-expect "Location of sets"
+expect {
+    "Location of sets" { }
+    timeout { die "TIMEOUT at sets location" }
+}
 send "cd0\r"
 
-expect "Pathname"
+expect {
+    "Pathname" { }
+    timeout { die "TIMEOUT at pathname" }
+}
 send "7.7/amd64\r"
 
-expect -re "Set name.*\]"
+expect {
+    -re "Set name.*\]" { }
+    timeout { die "TIMEOUT at set name" }
+}
 send "done\r"
 
 expect {
     "without verification" { send "yes\r" }
     "without SHA256.sig" { send "yes\r" }
     "Continue without verification" { send "yes\r" }
+    timeout { die "TIMEOUT at verification prompt" }
 }
 
 set timeout 900
 expect {
     "Location of sets" { send "done\r" }
-    timeout { puts "TIMEOUT during extraction"; exit 1 }
+    timeout { die "TIMEOUT during set extraction (15 min)" }
 }
 
 set timeout 300
-expect "CONGRATULATIONS"
+expect {
+    "CONGRATULATIONS" { }
+    timeout { die "TIMEOUT waiting for CONGRATULATIONS" }
+}
 send "\r"
 
-expect -re "\\(S\\)hell|\\(H\\)alt|\\(R\\)eboot|#"
+expect {
+    -re "\\(S\\)hell|\\(H\\)alt|\\(R\\)eboot|#" { }
+    timeout { die "TIMEOUT at reboot prompt" }
+}
 send "R\r"
 
-sleep 5
 puts "\n\[4/6\] Installation complete, reconfiguring VM ..."
 
 # --- Remove ISO and reboot from disk ---
-# Detach from console
-send "\x01q"
+sleep 5
+catch {send "\x01q"}
+catch {expect eof}
+catch {wait}
 sleep 2
 
 catch {exec incus stop $vm_name --force}
@@ -214,6 +309,7 @@ if {$ip eq ""} {
     # Use expect to SSH and install tools
     spawn ssh -o StrictHostKeyChecking=no -o PubkeyAuthentication=no root@$ip
 
+    set timeout 30
     expect {
         "Terminal type?" {
             send "vt220\r"
@@ -227,17 +323,25 @@ if {$ip eq ""} {
                     expect -re "#|\\$"
                 }
                 -re "#|\\$" { }
+                timeout { die "TIMEOUT at SSH login" }
             }
         }
+        timeout { die "TIMEOUT connecting via SSH" }
     }
 
     set timeout 600
     send "pkg_add -I cmake git ninja pkgconf curl wget gmake autoconf-2.72p0 automake-1.17 libtool python-3.12.11 gcc-11.2.0p15 llvm\r"
-    expect -re "#|\\$"
+    expect {
+        -re "#|\\$" { }
+        timeout { die "TIMEOUT during package installation (10 min)" }
+    }
     sleep 2
 
     send "uname -sr; cmake --version | head -1; git --version; python3 --version\r"
-    expect -re "#|\\$"
+    expect {
+        -re "#|\\$" { }
+        timeout { puts "TIMEOUT verifying tools" }
+    }
     sleep 1
 
     send "exit\r"

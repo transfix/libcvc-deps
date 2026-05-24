@@ -32,15 +32,30 @@ if {$iso_path eq ""} { set iso_path "/tmp/netbsd.iso" }
 set iso_url "https://cdn.NetBSD.org/pub/NetBSD/NetBSD-10.1/images/NetBSD-10.1-amd64.iso"
 set root_pass "build1234567"
 
+# Helper: abort with message
+proc die {msg} {
+    puts "FATAL: $msg"
+    exit 1
+}
+
+# Helper: safely close a spawn (handles dead spawns from reboots/halts)
+proc close_spawn {} {
+    sleep 5
+    catch {send "\x01q"}
+    catch {expect eof}
+    catch {wait}
+    sleep 3
+}
+
 puts "=== Provisioning NetBSD VM: $vm_name ==="
 
 # --- Download ISO if needed ---
 if {![file exists $iso_path]} {
     puts "\[1/8\] Downloading NetBSD 10.1 ISO ..."
-    set rc [catch {exec curl -sL -o $iso_path $iso_url} msg]
+    set rc [catch {exec curl -fSL -o $iso_path $iso_url} msg]
     if {$rc != 0} {
-        puts "ERROR: Failed to download ISO: $msg"
-        exit 1
+        catch {file delete $iso_path}
+        die "Failed to download ISO: $msg"
     }
 } else {
     puts "\[1/8\] Using existing ISO: $iso_path"
@@ -54,8 +69,7 @@ if {$target ne ""} {
 }
 set rc [catch {exec {*}$init_cmd} msg]
 if {$rc != 0} {
-    puts "ERROR: Failed to create VM: $msg"
-    exit 1
+    die "Failed to create VM: $msg"
 }
 
 # Attach ISO
@@ -70,7 +84,7 @@ exec incus start $vm_name
 sleep 3
 
 set timeout 300
-log_file -noappend /tmp/netbsd-provision.log
+log_file -noappend /tmp/netbsd-provision-$vm_name.log
 
 spawn incus console $vm_name --force
 
@@ -79,28 +93,27 @@ expect {
     "Choose an option" { send " " }
     "Boot normally" { send " " }
     "seconds" { send " " }
-    timeout { puts "TIMEOUT at boot menu"; exit 1 }
+    timeout { die "TIMEOUT at boot menu" }
 }
 
-# Select option 3 (Drop to boot prompt) — need Return after digit
+# Select option 3 (Drop to boot prompt)
 sleep 1
 send "3\r"
 
 expect {
     "help" { }
-    timeout { puts "TIMEOUT at boot prompt"; exit 1 }
+    timeout { die "TIMEOUT at boot prompt" }
 }
 
 # Switch serial console
 send "consdev com0\r"
 
 # CRITICAL: After consdev com0, the bootloader redraws its entire banner.
-# Wait for the new prompt to appear after the redraw.
 sleep 5
 expect {
     "\n> " { }
     "\r\n> " { }
-    timeout { puts "TIMEOUT after consdev"; exit 1 }
+    timeout { die "TIMEOUT after consdev" }
 }
 
 # Boot normally (enters the sysinst installer)
@@ -111,11 +124,12 @@ set timeout 300
 expect {
     "terminal emulation" { }
     "Terminal type" { }
-    timeout { puts "TIMEOUT terminal prompt"; exit 1 }
+    timeout { die "TIMEOUT waiting for terminal emulation prompt" }
 }
 send "vt100\r"
 
-# Curses-based installer — timing-based sends (pattern matching unreliable)
+# Curses-based installer — timing-based sends (pattern matching unreliable
+# for ncurses UI). Each sleep gives the UI time to render the next screen.
 # Language: a = English
 sleep 10; send "a\r"
 # Main menu: a = Install NetBSD to hard disk
@@ -126,7 +140,7 @@ sleep 10; send "b\r"
 sleep 10; send "a\r"
 # Partition type: a = GPT (required for EFI boot)
 sleep 10; send "a\r"
-# Partition sizing: b = Use default partition sizes (NOT "a" which is manual)
+# Partition sizing: b = Use default partition sizes
 sleep 10; send "b\r"
 # Accept partition sizes: x = Partition sizes ok
 sleep 10; send "x\r"
@@ -146,7 +160,7 @@ set timeout 1200
 expect {
     "Hit enter to continue" { }
     -re "(?i)hit enter" { }
-    timeout { puts "TIMEOUT extraction"; exit 1 }
+    timeout { die "TIMEOUT during set extraction (20 min)" }
 }
 send "\r"
 
@@ -173,12 +187,8 @@ send "d\r"
 
 puts "\n\[4/8\] Base installation complete."
 
-# The reboot kills the console connection — wait for spawn to die
-sleep 10
-catch {send "\x01q"}
-catch {expect eof}
-catch {wait}
-sleep 5
+# The reboot kills the console connection
+close_spawn
 
 # ============================================================
 # PHASE 2: Rescue boot from ISO to fix post-install config
@@ -197,17 +207,24 @@ expect {
     "Choose an option" { send " " }
     "Boot normally" { send " " }
     "seconds" { send " " }
-    timeout { puts "TIMEOUT at boot menu (phase 2)"; exit 1 }
+    timeout { die "TIMEOUT at boot menu (phase 2)" }
 }
 
 # Drop to boot prompt
 sleep 1; send "3\r"
-expect { "help" {} timeout { puts "TIMEOUT boot prompt (phase 2)"; exit 1 } }
+expect {
+    "help" { }
+    timeout { die "TIMEOUT at boot prompt (phase 2)" }
+}
 
 # Serial console
 send "consdev com0\r"
 sleep 5
-expect { "\n> " {} "\r\n> " {} timeout { puts "TIMEOUT consdev (phase 2)"; exit 1 } }
+expect {
+    "\n> " { }
+    "\r\n> " { }
+    timeout { die "TIMEOUT consdev (phase 2)" }
+}
 
 # Boot single-user from ISO
 send "boot -s\r"
@@ -215,16 +232,28 @@ send "boot -s\r"
 set timeout 300
 expect {
     "Enter pathname of shell" { send "\r"; sleep 3 }
-    timeout { puts "TIMEOUT shell (phase 2)"; exit 1 }
+    timeout { die "TIMEOUT shell (phase 2)" }
 }
-expect { -re "\n# $" {} -re "\r\n# " {} "# " {} timeout { puts "TIMEOUT prompt"; exit 1 } }
+expect {
+    -re "\n# $" { }
+    -re "\r\n# " { }
+    "# " { }
+    timeout { die "TIMEOUT prompt (phase 2)" }
+}
 
 # Writable scratch space (ISO root is read-only cd9660)
-send "mount -t tmpfs tmpfs /tmp\r"; expect "# "; sleep 1
+send "mount -t tmpfs tmpfs /tmp\r"
+expect { "# " { } timeout { die "TIMEOUT mount tmpfs" } }
+sleep 1
 
 # fsck and mount installed root
-send "fsck -y /dev/dk1\r"; expect "# "; sleep 5
-send "mount /dev/dk1 /mnt\r"; expect "# "; sleep 2
+send "fsck -y /dev/dk1\r"
+set timeout 120
+expect { "# " { } timeout { die "TIMEOUT fsck" } }
+sleep 2
+send "mount /dev/dk1 /mnt\r"
+expect { "# " { } timeout { die "TIMEOUT mount dk1" } }
+sleep 2
 
 # --- Serial console in bootloader ---
 send "cat > /mnt/boot.cfg << 'EOF'\r"; expect "> "
@@ -234,7 +263,9 @@ send "menu=Drop to boot prompt:prompt\r"; expect "> "
 send "default=1\r"; expect "> "
 send "timeout=5\r"; expect "> "
 send "consdev=com0,115200\r"; expect "> "
-send "EOF\r"; expect "# "; sleep 1
+send "EOF\r"
+expect { "# " { } timeout { die "TIMEOUT writing boot.cfg" } }
+sleep 1
 
 # --- rc.conf (sshd + DHCP) ---
 send "cat > /mnt/etc/rc.conf << 'EOF'\r"; expect "> "
@@ -243,33 +274,39 @@ send "hostname=$vm_name\r"; expect "> "
 send "sshd=YES\r"; expect "> "
 send "dhcpcd=YES\r"; expect "> "
 send "ntpd=NO\r"; expect "> "
-send "EOF\r"; expect "# "; sleep 1
+send "EOF\r"
+expect { "# " { } timeout { die "TIMEOUT writing rc.conf" } }
+sleep 1
 
 # --- DHCP for vioif0 ---
-send "echo 'dhcp' > /mnt/etc/ifconfig.vioif0\r"; expect "# "; sleep 1
+send "echo 'dhcp' > /mnt/etc/ifconfig.vioif0\r"
+expect { "# " { } timeout { die "TIMEOUT writing ifconfig" } }
+sleep 1
 
 # --- Serial getty on tty00 ---
 send {sed -i 's|^tty00.*|tty00 "/usr/libexec/getty std.115200" vt100 on secure|' /mnt/etc/ttys}
-send "\r"; expect "# "; sleep 1
+send "\r"
+expect { "# " { } timeout { die "TIMEOUT editing ttys" } }
+sleep 1
 
-# --- sshd config ---
-send "cat >> /mnt/etc/ssh/sshd_config << 'EOF'\r"; expect "> "
-send "PermitRootLogin yes\r"; expect "> "
-send "EOF\r"; expect "# "; sleep 1
+# --- sshd config (idempotent) ---
+send "grep -q '^PermitRootLogin yes' /mnt/etc/ssh/sshd_config || echo 'PermitRootLogin yes' >> /mnt/etc/ssh/sshd_config\r"
+expect { "# " { } timeout { die "TIMEOUT editing sshd_config" } }
+sleep 1
 
 # Sync and unmount
-send "sync; sync\r"; expect "# "; sleep 3
-send "umount /mnt\r"; expect "# "; sleep 1
+send "sync; sync\r"
+expect { "# " { } timeout { die "TIMEOUT sync" } }
+sleep 3
+send "umount /mnt\r"
+expect { "# " { } timeout { die "TIMEOUT umount" } }
+sleep 1
 send "halt -p\r"
 
 puts "\n\[6/8\] Post-install config fix complete."
 
-# The halt kills the spawn — wait for it to die
-sleep 10
-catch {send "\x01q"}
-catch {expect eof}
-catch {wait}
-sleep 5
+# The halt kills the spawn
+close_spawn
 
 # ============================================================
 # PHASE 3: Boot from disk in single-user to set password
@@ -291,25 +328,50 @@ expect {
     "Choose an option" { send " " }
     "Boot normally" { send " " }
     "seconds" { send " " }
-    timeout { puts "TIMEOUT boot menu (phase 3)"; exit 1 }
+    timeout { die "TIMEOUT boot menu (phase 3)" }
 }
 sleep 1; send "2\r"
 
 set timeout 300
 expect {
     "Enter pathname of shell" { send "\r"; sleep 3 }
-    timeout { puts "TIMEOUT shell (phase 3)"; exit 1 }
+    timeout { die "TIMEOUT shell (phase 3)" }
 }
-expect { "# " {} timeout { puts "TIMEOUT prompt (phase 3)"; exit 1 } }
+expect {
+    "# " { }
+    timeout { die "TIMEOUT prompt (phase 3)" }
+}
 
 # Mount root read-write
-send "mount -o rw /\r"; expect "# "; sleep 1
+send "mount -o rw /\r"
+expect { "# " { } timeout { die "TIMEOUT mounting rw" } }
+sleep 1
+
+# Run fsck to clean "not clean" flag
+send "fsck -y /dev/dk1\r"
+set timeout 120
+expect { "# " { } timeout { die "TIMEOUT fsck (phase 3)" } }
+sleep 1
 
 # Set password with native passwd (generates argon2id)
 send "passwd root\r"
-expect { "New Password:" { send "$root_pass\r" } "New password:" { send "$root_pass\r" } timeout { puts "TIMEOUT passwd"; exit 1 } }
-expect { "Retype New Password:" { send "$root_pass\r" } "Retype new password:" { send "$root_pass\r" } timeout { puts "TIMEOUT retype"; exit 1 } }
-expect "# "; sleep 1
+expect {
+    "New Password:" { send "$root_pass\r" }
+    "New password:" { send "$root_pass\r" }
+    timeout { die "TIMEOUT passwd" }
+}
+expect {
+    "Retype New Password:" { send "$root_pass\r" }
+    "Retype new password:" { send "$root_pass\r" }
+    timeout { die "TIMEOUT retype" }
+}
+expect { "# " { } timeout { die "TIMEOUT after passwd" } }
+sleep 1
+
+# Sync and reboot cleanly (avoids dirty FS on next boot)
+send "sync; sync\r"
+expect { "# " { } timeout {} }
+sleep 2
 
 # Continue to multi-user
 send "exit\r"; sleep 2
@@ -317,13 +379,15 @@ send "exit\r"; sleep 2
 set timeout 120
 expect {
     "login:" { puts "\nMulti-user mode reached!" }
-    timeout { puts "\nTimeout waiting for login" }
+    timeout { puts "\nTimeout waiting for login (non-fatal)" }
 }
 
 puts "\n\[8/8\] Installing build tools ..."
 
 # Detach and wait for networking
-send "\x01q"
+catch {send "\x01q"}
+catch {expect eof}
+catch {wait}
 sleep 30
 
 # Find IP
@@ -341,24 +405,34 @@ if {$ip eq ""} {
     puts "Install tools manually via SSH."
 } else {
     # SSH in and install tools
+    set timeout 30
     spawn ssh -o StrictHostKeyChecking=no -o PubkeyAuthentication=no root@$ip
-    expect "assword"
-    send "$root_pass\r"
-    expect "# "
+    expect {
+        "assword" { send "$root_pass\r" }
+        timeout { die "TIMEOUT SSH connect to $ip" }
+    }
+    expect {
+        "# " { }
+        timeout { die "TIMEOUT at SSH prompt" }
+    }
 
     set timeout 600
-    send "export PATH=/usr/sbin:/sbin:/usr/pkg/sbin:\$PATH\r"
+    send "export PATH=/usr/sbin:/sbin:/usr/pkg/sbin:/usr/pkg/bin:\$PATH\r"
     expect "# "
     send "export PKG_PATH='https://cdn.NetBSD.org/pub/pkgsrc/packages/NetBSD/amd64/10.1/All'\r"
     expect "# "
-    send "pkg_add pkgin 2>/dev/null; pkgin -y update\r"
-    expect "# "
-    send "pkgin -y install cmake git ninja-build pkgconf curl wget gmake autoconf automake libtool python313 gcc14 llvm clang\r"
-    expect "# "
+    send "pkg_add cmake git-base ninja-build pkgconf curl wget gmake autoconf automake libtool python312 gcc13\r"
+    expect {
+        "# " { }
+        timeout { die "TIMEOUT during package installation (10 min)" }
+    }
     sleep 2
 
-    send "uname -sr; cmake --version | head -1; git --version; python3.13 --version\r"
-    expect "# "
+    send "export PATH=/usr/pkg/bin:/usr/pkg/sbin:\$PATH; uname -sr; cmake --version | head -1; git --version; python3.12 --version\r"
+    expect {
+        "# " { }
+        timeout { puts "TIMEOUT verifying tools (non-fatal)" }
+    }
     sleep 1
 
     send "exit\r"
