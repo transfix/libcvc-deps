@@ -6,6 +6,9 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 $msysPrefix = ConvertTo-MsysPath $env:CVC_INSTALL_DIR
 
+# GMP cross-compilation needs CC_FOR_BUILD for host-side code generators.
+$env:CC_FOR_BUILD = if ($env:CVC_HOST_CC) { $env:CVC_HOST_CC } else { 'cc' }
+
 Push-Location $env:CVC_SOURCE_DIR
 try {
     & emconfigure bash ./configure `
