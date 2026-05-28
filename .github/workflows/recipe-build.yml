@@ -164,21 +164,6 @@ jobs:
         with:
           arch: x64
 
-      # ── Qt6 (Windows — pre-built via aqtinstall) ──
-      # The qt6 recipe on Windows stages from the pre-installed Qt
-      # ($Qt6_DIR) rather than building from source.  This step
-      # provides it.  Keep the version in sync with recipes/qt6/recipe.yaml.
-      - name: Install Qt6 (Windows)
-        if: inputs.platform == 'windows'
-        uses: jurplel/install-qt-action@v4
-        with:
-          version: '6.8.*'
-          host: 'windows'
-          target: 'desktop'
-          arch: 'win64_msvc2019_64'
-          modules: ''
-          cache: true
-
       # ── Install cvcpkg ──
       - name: Install cvcpkg
         shell: bash
