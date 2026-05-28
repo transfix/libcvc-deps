@@ -242,6 +242,10 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -251,16 +255,36 @@ jobs:
       - name: List artifacts
         run: find artifacts -type f | sort
 
+      - name: Build recipes tarball
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          tar czf "artifacts/cvcpkg-recipes-${VERSION}.tar.gz" \
+            -C "${{ github.workspace }}" recipes/
+
+      - name: Build Python wheel
+        run: |
+          pip install build
+          cd tools/cvcpkg
+          # Bundle recipes into the wheel
+          rm -rf src/cvcpkg/recipes/*
+          cp -r "${{ github.workspace }}/recipes/"* src/cvcpkg/recipes/ 2>/dev/null || true
+          rm -f src/cvcpkg/recipes/.gitignore
+          python -m build
+          cp dist/cvcpkg-*.whl "${{ github.workspace }}/artifacts/"
+          cp dist/cvcpkg-*.tar.gz "${{ github.workspace }}/artifacts/cvcpkg-sdist.tar.gz" 2>/dev/null || true
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           prerelease: ${{ inputs.prerelease || false }}
           generate_release_notes: false
-          # Only upload index metadata — binary archives are published
-          # to pkg.tx.wtf via catalog-publish.yml.  Uploading hundreds
-          # of per-component archives to GitHub Releases triggers
-          # abuse-detection rate limits and wastes storage quota.
+          # Index metadata, recipes tarball, and Python wheel.
+          # Binary archives go to pkg.tx.wtf via catalog-publish.yml.
+          # Standalone cvcpkg binaries are attached by cvcpkg-standalone.yml.
           files: |
             artifacts/*-index.yaml
+            artifacts/cvcpkg-recipes-*.tar.gz
+            artifacts/cvcpkg-*.whl
+            artifacts/cvcpkg-sdist.tar.gz
           fail_on_unmatched_files: false

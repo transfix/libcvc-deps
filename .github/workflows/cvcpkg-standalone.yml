@@ -1,4 +1,5 @@
-# Build self-contained cvcpkg executables for Linux, macOS, and Windows.
+# Build self-contained cvcpkg executables for Linux, macOS, Windows,
+# and BSDs (FreeBSD, OpenBSD, NetBSD).
 #
 # Produces single-file binaries via PyInstaller that embed the Python
 # runtime and all dependencies — no system Python required.
@@ -11,6 +12,9 @@
 #   cvcpkg-macos-arm64
 #   cvcpkg-macos-x86_64
 #   cvcpkg-windows-x86_64.exe
+#   cvcpkg-freebsd-x86_64
+#   cvcpkg-openbsd-x86_64
+#   cvcpkg-netbsd-x86_64
 
 name: Build cvcpkg standalone
 
@@ -126,11 +130,119 @@ jobs:
           name: ${{ matrix.artifact }}
           path: tools/cvcpkg/dist/${{ matrix.artifact }}
 
+  # ─────────────────── BSD builds via SSH ──────────────────────
+  build-bsd:
+    name: Build (${{ matrix.os }})
+    runs-on: ["self-hosted", "Linux", "X64", "cvcpkg-builder"]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: freebsd-x86_64
+            host: 10.66.77.174
+            python: python3.11
+            artifact: cvcpkg-freebsd-x86_64
+          - os: openbsd-x86_64
+            host: 10.66.77.197
+            python: python3.12
+            artifact: cvcpkg-openbsd-x86_64
+          - os: netbsd-x86_64
+            host: 10.66.77.214
+            python: python3.13
+            artifact: cvcpkg-netbsd-x86_64
+
+    env:
+      SSH_OPTS: '-o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o BatchMode=yes'
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Sync repo to BSD VM
+        shell: bash
+        run: |
+          set -euo pipefail
+          VM="root@${{ matrix.host }}"
+          case "${{ matrix.os }}" in
+            openbsd*) BASE_DIR="/usr/local/tmp" ;;
+            *)        BASE_DIR="/tmp" ;;
+          esac
+          REMOTE_DIR="${BASE_DIR}/cvcpkg-standalone-$$"
+
+          ssh ${SSH_OPTS} "${VM}" "mkdir -p ${REMOTE_DIR}"
+          tar cf - --exclude='.git' --exclude='build' --exclude='prefix' \
+            --exclude='dist' --exclude='__pycache__' --exclude='*.egg-info' . \
+            | ssh ${SSH_OPTS} "${VM}" "tar xf - -C ${REMOTE_DIR}"
+
+          echo "remote_dir=${REMOTE_DIR}" >> "$GITHUB_ENV"
+
+      - name: Install deps + build standalone
+        shell: bash
+        run: |
+          set -euo pipefail
+          VM="root@${{ matrix.host }}"
+          PYTHON="${{ matrix.python }}"
+
+          ssh ${SSH_OPTS} "${VM}" "cd ${remote_dir} && \
+            TMPDIR=/usr/local/tmp ${PYTHON} -m pip install --break-system-packages pyinstaller 2>/dev/null \
+              || ${PYTHON} -m pip install pyinstaller && \
+            TMPDIR=/usr/local/tmp ${PYTHON} -m pip install --break-system-packages ./tools/cvcpkg 2>/dev/null \
+              || ${PYTHON} -m pip install ./tools/cvcpkg && \
+            rm -rf tools/cvcpkg/src/cvcpkg/recipes/.gitignore && \
+            cp -r recipes/* tools/cvcpkg/src/cvcpkg/recipes/ 2>/dev/null || true && \
+            cd tools/cvcpkg && \
+            ${PYTHON} -m PyInstaller \
+              --onefile \
+              --name cvcpkg \
+              --console \
+              --noconfirm \
+              --clean \
+              --add-data 'src/cvcpkg/recipes:cvcpkg/recipes' \
+              --add-data 'src/cvcpkg/migrations:cvcpkg/migrations' \
+              --hidden-import cvcpkg.backends \
+              --hidden-import cvcpkg.server \
+              --hidden-import cvcpkg.server.cli \
+              --hidden-import yaml \
+              --hidden-import click \
+              --hidden-import sqlalchemy \
+              --hidden-import httpx \
+              --hidden-import cryptography \
+              --collect-submodules cvcpkg \
+              src/cvcpkg/__main__.py"
+
+      - name: Verify + retrieve binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          VM="root@${{ matrix.host }}"
+
+          ssh ${SSH_OPTS} "${VM}" "cd ${remote_dir}/tools/cvcpkg && \
+            chmod +x dist/cvcpkg && ./dist/cvcpkg --version"
+
+          mkdir -p dist
+          scp ${SSH_OPTS} "${VM}:${remote_dir}/tools/cvcpkg/dist/cvcpkg" \
+            "dist/${{ matrix.artifact }}"
+
+      - name: Clean up BSD VM
+        if: always()
+        shell: bash
+        run: |
+          VM="root@${{ matrix.host }}"
+          ssh ${SSH_OPTS} "${VM}" "rm -rf ${remote_dir}" || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/${{ matrix.artifact }}
+
   release:
     name: Attach to GitHub Release
-    needs: build
+    needs: [build, build-bsd]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
+    if: |
+      always()
+      && !cancelled()
+      && startsWith(github.ref, 'refs/tags/')
+      && needs.build.result == 'success'
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -150,4 +262,7 @@ jobs:
             artifacts/cvcpkg-macos-arm64
             artifacts/cvcpkg-macos-x86_64
             artifacts/cvcpkg-windows-x86_64.exe
+            artifacts/cvcpkg-freebsd-x86_64
+            artifacts/cvcpkg-openbsd-x86_64
+            artifacts/cvcpkg-netbsd-x86_64
           fail_on_unmatched_files: false
