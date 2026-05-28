@@ -10,7 +10,6 @@
 # Artifacts are uploaded to the GitHub Release as:
 #   cvcpkg-linux-x86_64
 #   cvcpkg-macos-arm64
-#   cvcpkg-macos-x86_64
 #   cvcpkg-windows-x86_64.exe
 #   cvcpkg-freebsd-x86_64
 #   cvcpkg-openbsd-x86_64
@@ -45,11 +44,8 @@ jobs:
             runner: ubuntu-latest
             artifact: cvcpkg-linux-x86_64
           - os: macos-arm64
-            runner: macos-latest        # Apple Silicon
+            runner: macos-latest
             artifact: cvcpkg-macos-arm64
-          - os: macos-x86_64
-            runner: macos-13            # Intel
-            artifact: cvcpkg-macos-x86_64
           - os: windows-x86_64
             runner: windows-latest
             artifact: cvcpkg-windows-x86_64.exe
@@ -260,7 +256,6 @@ jobs:
           files: |
             artifacts/cvcpkg-linux-x86_64
             artifacts/cvcpkg-macos-arm64
-            artifacts/cvcpkg-macos-x86_64
             artifacts/cvcpkg-windows-x86_64.exe
             artifacts/cvcpkg-freebsd-x86_64
             artifacts/cvcpkg-openbsd-x86_64
