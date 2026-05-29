@@ -268,20 +268,6 @@ jobs:
             -DCMAKE_INSTALL_PREFIX="${{ github.workspace }}/prefix"
           cmake --install build
 
-      # ── Linux: patch RPATH to $ORIGIN ──
-      - name: Patch RPATH ($ORIGIN)
-        if: inputs.platform == 'linux' && inputs.link == 'shared'
-        run: |
-          set -euo pipefail
-          PREFIX="${{ github.workspace }}/prefix"
-          shopt -s globstar nullglob
-          for so in "$PREFIX"/lib/**/*.so* "$PREFIX"/lib/*.so*; do
-            [ -e "$so" ] || continue
-            [ -L "$so" ] && continue
-            patchelf --remove-rpath "$so" 2>/dev/null || true
-            patchelf --set-rpath '$ORIGIN' "$so" 2>/dev/null || true
-          done
-
       # Upload per-component bundles for publishing to cvcpkg-server
       - name: Upload per-component bundles
         uses: actions/upload-artifact@v4
