@@ -530,6 +530,10 @@ def run_build(ctx: BuildContext) -> None:
     if result.returncode != 0:
         raise BuildError(f"Build script for {ctx.recipe.name} exited with code {result.returncode}")
 
+    # Patch RPATH on Linux shared builds so bundles are relocatable.
+    if ctx.platform == "linux" and ctx.link == "shared":
+        _patch_linux_rpath(ctx.install_dir)
+
 
 # ── Test execution ──────────────────────────────────────────────
 
@@ -1535,8 +1539,6 @@ def build_all(
                     host_platform=host_platform,
                 )
                 run_build(ctx)
-                if platform == "linux" and link == "shared":
-                    _patch_linux_rpath(install_dir)
                 if recipe.test_script:
                     run_test(ctx)
                 # Merge this recipe's install into the shared prefix so
