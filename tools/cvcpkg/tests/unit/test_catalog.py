@@ -168,8 +168,14 @@ def _write_index(path, bundles):
 class TestGenerateCatalog:
     """Tests for the generate_catalog function."""
 
-    def _make_bundle(self, name="zlib", version="1.3.1", platform="linux",
-                     archive="zlib-1.3.1-linux-x86_64-release.tar.gz", **extra):
+    def _make_bundle(
+        self,
+        name="zlib",
+        version="1.3.1",
+        platform="linux",
+        archive="zlib-1.3.1-linux-x86_64-release.tar.gz",
+        **extra,
+    ):
         bundle = {
             "name": name,
             "version": version,
@@ -188,9 +194,12 @@ class TestGenerateCatalog:
         idx_dir.mkdir()
         out_dir = tmp_path / "output"
 
-        _write_index(idx_dir / "linux-release-shared-index.yaml", [
-            self._make_bundle(),
-        ])
+        _write_index(
+            idx_dir / "linux-release-shared-index.yaml",
+            [
+                self._make_bundle(),
+            ],
+        )
 
         cat = generate_catalog(idx_dir, out_dir, release_tag="v1.0.0")
 
@@ -198,17 +207,22 @@ class TestGenerateCatalog:
         assert cat["revision"] == 1
         assert len(cat["bundles"]) == 1
         assert cat["bundles"][0]["source_release"] == "v1.0.0"
-        assert cat["bundles"][0]["archive_url"] == \
-            "https://pkg.tx.wtf/v1/download/zlib-1.3.1-linux-x86_64-release.tar.gz"
+        assert (
+            cat["bundles"][0]["archive_url"]
+            == "https://pkg.tx.wtf/v1/download/zlib-1.3.1-linux-x86_64-release.tar.gz"
+        )
 
     def test_output_files_created(self, tmp_path):
         idx_dir = tmp_path / "indexes"
         idx_dir.mkdir()
         out_dir = tmp_path / "output"
 
-        _write_index(idx_dir / "linux-release-shared-index.yaml", [
-            self._make_bundle(),
-        ])
+        _write_index(
+            idx_dir / "linux-release-shared-index.yaml",
+            [
+                self._make_bundle(),
+            ],
+        )
 
         generate_catalog(idx_dir, out_dir, release_tag="v2.0.0")
 
@@ -265,10 +279,13 @@ class TestGenerateCatalog:
         idx_dir.mkdir()
         out_dir = tmp_path / "output"
 
-        _write_index(idx_dir / "test-index.yaml", [
-            self._make_bundle("zlib", "1.3.1"),
-            self._make_bundle("boost", "1.86.0", archive="boost-1.86.0.tar.gz"),
-        ])
+        _write_index(
+            idx_dir / "test-index.yaml",
+            [
+                self._make_bundle("zlib", "1.3.1"),
+                self._make_bundle("boost", "1.86.0", archive="boost-1.86.0.tar.gz"),
+            ],
+        )
         generate_catalog(idx_dir, out_dir, release_tag="v1.0.0")
 
         rel_idx = yaml.safe_load((out_dir / "v1.0.0-index.yaml").read_text())
@@ -283,13 +300,20 @@ class TestGenerateCatalog:
         idx_dir.mkdir()
         out_dir = tmp_path / "output"
 
-        _write_index(idx_dir / "linux-release-shared-index.yaml", [
-            self._make_bundle("zlib", "1.3.1"),
-        ])
-        _write_index(idx_dir / "windows-release-shared-index.yaml", [
-            self._make_bundle("zlib", "1.3.1", platform="windows",
-                              archive="zlib-1.3.1-windows.zip"),
-        ])
+        _write_index(
+            idx_dir / "linux-release-shared-index.yaml",
+            [
+                self._make_bundle("zlib", "1.3.1"),
+            ],
+        )
+        _write_index(
+            idx_dir / "windows-release-shared-index.yaml",
+            [
+                self._make_bundle(
+                    "zlib", "1.3.1", platform="windows", archive="zlib-1.3.1-windows.zip"
+                ),
+            ],
+        )
 
         cat = generate_catalog(idx_dir, out_dir, release_tag="v1.0.0")
         assert len(cat["bundles"]) == 2
@@ -301,7 +325,8 @@ class TestGenerateCatalog:
 
         _write_index(idx_dir / "test-index.yaml", [self._make_bundle()])
         cat = generate_catalog(
-            idx_dir, out_dir,
+            idx_dir,
+            out_dir,
             release_tag="v1.0.0",
             server_url="https://custom.example.com",
         )
@@ -314,7 +339,8 @@ class TestGenerateCatalog:
 
         _write_index(idx_dir / "test-index.yaml", [self._make_bundle()])
         cat = generate_catalog(
-            idx_dir, out_dir,
+            idx_dir,
+            out_dir,
             release_tag="v2.0.0",
             base_revision=5,
         )
@@ -326,9 +352,12 @@ class TestGenerateCatalog:
         idx_dir.mkdir()
         out_dir = tmp_path / "output"
 
-        _write_index(idx_dir / "test-index.yaml", [
-            self._make_bundle(archive_url="https://mirror.example.com/zlib.tar.gz"),
-        ])
+        _write_index(
+            idx_dir / "test-index.yaml",
+            [
+                self._make_bundle(archive_url="https://mirror.example.com/zlib.tar.gz"),
+            ],
+        )
         cat = generate_catalog(idx_dir, out_dir, release_tag="v1.0.0")
         # Pre-existing archive_url should not be overwritten
         assert cat["bundles"][0]["archive_url"] == "https://mirror.example.com/zlib.tar.gz"
@@ -338,9 +367,12 @@ class TestGenerateCatalog:
         idx_dir.mkdir()
         out_dir = tmp_path / "output"
 
-        _write_index(idx_dir / "test-index.yaml", [
-            self._make_bundle(mirror_urls=["https://old-mirror.example.com/zlib.tar.gz"]),
-        ])
+        _write_index(
+            idx_dir / "test-index.yaml",
+            [
+                self._make_bundle(mirror_urls=["https://old-mirror.example.com/zlib.tar.gz"]),
+            ],
+        )
         cat = generate_catalog(idx_dir, out_dir, release_tag="v1.0.0")
         assert "mirror_urls" not in cat["bundles"][0]
 
@@ -386,13 +418,22 @@ class TestGenerateCatalog:
         idx_dir.mkdir()
         out_dir = tmp_path / "output"
 
-        _write_index(idx_dir / "linux-release-shared-index.yaml", [
-            self._make_bundle(),
-        ])
+        _write_index(
+            idx_dir / "linux-release-shared-index.yaml",
+            [
+                self._make_bundle(),
+            ],
+        )
         # This file should be ignored (doesn't match *-index.yaml)
-        (idx_dir / "config.yaml").write_text(yaml.dump({"bundles": [
-            {"name": "rogue", "version": "9.9.9", "platform": "linux"},
-        ]}))
+        (idx_dir / "config.yaml").write_text(
+            yaml.dump(
+                {
+                    "bundles": [
+                        {"name": "rogue", "version": "9.9.9", "platform": "linux"},
+                    ]
+                }
+            )
+        )
 
         cat = generate_catalog(idx_dir, out_dir, release_tag="v1.0.0")
         names = [b["name"] for b in cat["bundles"]]
