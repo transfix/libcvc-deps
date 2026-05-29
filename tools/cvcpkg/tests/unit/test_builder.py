@@ -20,7 +20,9 @@ from cvcpkg.builder import (
     SourceSpec,
     _cache_key,
     _dep_names,
+    _detect_arch_for_platform,
     _file_list,
+    _is_any_recipe,
     _select_matrix_entry,
     _sha256_file,
     _source_cache_dir,
@@ -254,6 +256,203 @@ class TestSelectMatrixEntry:
         r = Recipe.load(recipe_dir)
         m = _select_matrix_entry(r, "wasm", "windows")
         assert m.host_platform == "linux"  # falls back
+
+
+# ── Platform "any" (platform-independent recipes) ──────────────
+
+
+ANY_RECIPE = {
+    "schema_version": 1,
+    "recipe": {
+        "name": "web-assets",
+        "upstream_version": "1.0.0",
+        "cvc_revision": 1,
+        "kind": "data",
+        "tags": ["static-assets", "html"],
+    },
+    "source": {"type": "prebuilt"},
+    "build": {
+        "matrix": [
+            {"platform": "any", "script": "build.sh"},
+        ],
+    },
+    "package": {"files": ["share/*"]},
+}
+
+
+class TestPlatformAny:
+    """Tests for the 'any' (platform-independent) recipe support."""
+
+    def test_detect_arch_noarch(self):
+        assert _detect_arch_for_platform("any") == "noarch"
+
+    def test_is_any_recipe_true(self, tmp_path):
+        recipe_dir = tmp_path / "recipes" / "web-assets"
+        _write_recipe(recipe_dir, ANY_RECIPE)
+        r = Recipe.load(recipe_dir)
+        assert _is_any_recipe(r)
+
+    def test_is_any_recipe_false(self, tmp_path):
+        recipe_dir = tmp_path / "recipes" / "testpkg"
+        _write_recipe(recipe_dir, MINIMAL_RECIPE)
+        r = Recipe.load(recipe_dir)
+        assert not _is_any_recipe(r)
+
+    def test_is_any_recipe_mixed_false(self, tmp_path):
+        """A recipe with both 'any' and 'linux' entries is NOT platform-independent."""
+        recipe_dict = {
+            **MINIMAL_RECIPE,
+            "build": {
+                "matrix": [
+                    {"platform": "any", "script": "build.sh"},
+                    {"platform": "linux", "script": "build-linux.sh"},
+                ],
+            },
+        }
+        recipe_dir = tmp_path / "recipes" / "mixed"
+        _write_recipe(recipe_dir, recipe_dict)
+        r = Recipe.load(recipe_dir)
+        assert not _is_any_recipe(r)
+
+    def test_select_matrix_entry_any_fallback(self, tmp_path):
+        """When no exact platform match exists, 'any' entry is selected."""
+        recipe_dir = tmp_path / "recipes" / "web-assets"
+        _write_recipe(recipe_dir, ANY_RECIPE)
+        r = Recipe.load(recipe_dir)
+        m = _select_matrix_entry(r, "linux")
+        assert m.platform == "any"
+        assert m.script == "build.sh"
+
+    def test_select_matrix_entry_any_for_windows(self, tmp_path):
+        recipe_dir = tmp_path / "recipes" / "web-assets"
+        _write_recipe(recipe_dir, ANY_RECIPE)
+        r = Recipe.load(recipe_dir)
+        m = _select_matrix_entry(r, "windows")
+        assert m.platform == "any"
+
+    def test_select_matrix_entry_exact_over_any(self, tmp_path):
+        """An exact platform match takes precedence over 'any'."""
+        recipe_dict = {
+            **ANY_RECIPE,
+            "build": {
+                "matrix": [
+                    {"platform": "any", "script": "build.sh"},
+                    {"platform": "linux", "script": "build-linux.sh"},
+                ],
+            },
+        }
+        recipe_dir = tmp_path / "recipes" / "web-assets"
+        _write_recipe(recipe_dir, recipe_dict)
+        r = Recipe.load(recipe_dir)
+        m = _select_matrix_entry(r, "linux")
+        assert m.platform == "linux"
+        assert m.script == "build-linux.sh"
+
+    def test_kind_field_loaded(self, tmp_path):
+        recipe_dir = tmp_path / "recipes" / "web-assets"
+        _write_recipe(recipe_dir, ANY_RECIPE)
+        r = Recipe.load(recipe_dir)
+        assert r.kind == "data"
+
+    def test_kind_field_default_empty(self, tmp_path):
+        recipe_dir = tmp_path / "recipes" / "testpkg"
+        _write_recipe(recipe_dir, MINIMAL_RECIPE)
+        r = Recipe.load(recipe_dir)
+        assert r.kind == ""
+
+    def test_kind_in_manifest(self, tmp_path):
+        recipe_dir = tmp_path / "recipes" / "web-assets"
+        _write_recipe(recipe_dir, ANY_RECIPE)
+        r = Recipe.load(recipe_dir)
+        install_dir = tmp_path / "install"
+        install_dir.mkdir()
+        manifest = generate_manifest(r, install_dir, "any", "noarch", "release", "shared")
+        assert manifest["meta"]["kind"] == "data"
+
+    def test_kind_absent_when_empty(self, tmp_path):
+        recipe_dir = tmp_path / "recipes" / "testpkg"
+        _write_recipe(recipe_dir, MINIMAL_RECIPE)
+        r = Recipe.load(recipe_dir)
+        install_dir = tmp_path / "install"
+        install_dir.mkdir()
+        manifest = generate_manifest(r, install_dir, "linux", "x86_64", "release", "shared")
+        assert "kind" not in manifest["meta"]
+
+    def test_dep_names_any_platform_included(self, tmp_path):
+        """Dependencies with platforms=['any'] are available to all target platforms."""
+        recipe_dict = {
+            **MINIMAL_RECIPE,
+            "depends": {
+                "build": [{"name": "web-assets", "platforms": ["any"]}],
+            },
+        }
+        recipe_dir = tmp_path / "recipes" / "consumer"
+        _write_recipe(recipe_dir, recipe_dict)
+        r = Recipe.load(recipe_dir)
+        # "any" in platforms list should match when building for linux
+        names = _dep_names(r, "linux")
+        assert "web-assets" in names
+
+    def test_dep_names_any_platform_included_for_windows(self, tmp_path):
+        recipe_dict = {
+            **MINIMAL_RECIPE,
+            "depends": {
+                "build": [{"name": "web-assets", "platforms": ["any"]}],
+            },
+        }
+        recipe_dir = tmp_path / "recipes" / "consumer"
+        _write_recipe(recipe_dir, recipe_dict)
+        r = Recipe.load(recipe_dir)
+        names = _dep_names(r, "windows")
+        assert "web-assets" in names
+
+    def test_build_all_includes_any_recipes(self, tmp_path):
+        """build_all for linux should include platform=any recipes."""
+        from cvcpkg.builder import build_all
+
+        recipes_dir = tmp_path / "recipes"
+
+        # Create an "any" recipe
+        any_dir = recipes_dir / "web-assets"
+        any_dir.mkdir(parents=True)
+        _write_recipe(any_dir, ANY_RECIPE)
+        (any_dir / "build.sh").write_text("#!/bin/bash\ntrue\n")
+
+        # Create a linux recipe
+        linux_dir = recipes_dir / "mylib"
+        linux_dir.mkdir(parents=True)
+        _write_recipe(
+            linux_dir,
+            {
+                **MINIMAL_RECIPE,
+                "recipe": {**MINIMAL_RECIPE["recipe"], "name": "mylib"},
+            },
+        )
+        (linux_dir / "build.sh").write_text("#!/bin/bash\ntrue\n")
+
+        with (
+            patch("cvcpkg.builder.run_build") as mock_build,
+            patch("cvcpkg.builder.fetch_source") as mock_fetch,
+        ):
+            mock_fetch.side_effect = lambda r, w: w / "src"
+            mock_build.side_effect = lambda ctx: ctx.install_dir.mkdir(parents=True, exist_ok=True)
+            contexts = build_all(recipes_dir, platform="linux", no_cache=True)
+        built_names = {c.recipe.name for c in contexts}
+        assert "web-assets" in built_names
+        assert "mylib" in built_names
+
+    def test_create_archive_any_uses_tar(self, tmp_path):
+        """platform=any should produce a .tar.gz archive, not .zip."""
+        staging = tmp_path / "staging"
+        staging.mkdir()
+        (staging / "data.txt").write_text("hello")
+        output_dir = tmp_path / "dist"
+        path, sha, size = create_archive(
+            staging, output_dir, "web-assets", "1.0.0+cvc.1", "any", "noarch", "release", "shared"
+        )
+        assert path.suffix == ".gz"
+        assert path.name.endswith(".tar.gz")
+        assert "any-noarch" in path.name
 
 
 # ── Source fetching ─────────────────────────────────────────────
