@@ -60,6 +60,7 @@ jobs:
       config: ${{ matrix.config }}
       link: ${{ matrix.link }}
       sha_suffix: ${{ inputs.sha_suffix || '' }}
+    secrets: inherit
 
   linux-selfhosted:
     strategy:
@@ -77,6 +78,7 @@ jobs:
       link: ${{ matrix.link }}
       sha_suffix: ${{ inputs.sha_suffix || '' }}
       runner: '["self-hosted","Linux","X64","cvcpkg-builder"]'
+    secrets: inherit
 
   # ─────────────────── macOS ───────────────────────────────────
   macos:
@@ -98,6 +100,7 @@ jobs:
       config: ${{ matrix.config }}
       link: ${{ matrix.link }}
       sha_suffix: ${{ inputs.sha_suffix || '' }}
+    secrets: inherit
 
   # ─────────────────── Windows ─────────────────────────────────
   windows:
@@ -119,6 +122,7 @@ jobs:
       config: ${{ matrix.config }}
       link: ${{ matrix.link }}
       sha_suffix: ${{ inputs.sha_suffix || '' }}
+    secrets: inherit
 
   # ─────────────────── BSD ─────────────────────────────────────
   freebsd:
@@ -195,6 +199,7 @@ jobs:
       link: ${{ matrix.link }}
       sha_suffix: ${{ inputs.sha_suffix || '' }}
       host_platform: linux
+    secrets: inherit
 
   wasm-macos:
     strategy:
@@ -212,6 +217,7 @@ jobs:
       link: ${{ matrix.link }}
       sha_suffix: ${{ inputs.sha_suffix || '' }}
       host_platform: macos
+    secrets: inherit
 
   wasm-windows:
     strategy:
@@ -229,6 +235,7 @@ jobs:
       link: ${{ matrix.link }}
       sha_suffix: ${{ inputs.sha_suffix || '' }}
       host_platform: windows
+    secrets: inherit
 
   # ─────────────────── GitHub Release ──────────────────────────
   release:
