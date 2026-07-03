@@ -92,9 +92,7 @@ class TestFetchCatalogHeadRefused:
 
     def test_get_still_authoritative(self, tmp_path):
         """A 500 on GET is still a real failure even if HEAD was refused."""
-        server, thread, port = _serve(
-            _make_handler(head_status=405, get_status=500), requests=2
-        )
+        server, thread, port = _serve(_make_handler(head_status=405, get_status=500), requests=2)
         try:
             with pytest.raises(CatalogError):
                 fetch_catalog(f"http://127.0.0.1:{port}/v1/catalog", cache_dir=tmp_path)
