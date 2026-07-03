@@ -635,9 +635,7 @@ def write_activate_scripts(
         )
         written.append(fish_path)
         csh_path = bin_dir / "activate.csh"
-        csh_path.write_text(
-            render_csh(prefix, prompt=prompt, platform=platform), encoding="utf-8"
-        )
+        csh_path.write_text(render_csh(prefix, prompt=prompt, platform=platform), encoding="utf-8")
         written.append(csh_path)
         # POSIX activate scripts are sourced, but chmod +r is enough;
         # they don't need +x.  We keep 0644 to match Python venv.

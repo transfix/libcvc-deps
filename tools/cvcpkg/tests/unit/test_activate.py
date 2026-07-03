@@ -13,9 +13,7 @@ class TestLibVarSelection:
     def test_macos_uses_dyld(self):
         assert act._lib_var_for_platform("macos") == "DYLD_LIBRARY_PATH"
 
-    @pytest.mark.parametrize(
-        "plat", ["linux", "freebsd", "openbsd", "netbsd", "wasi"]
-    )
+    @pytest.mark.parametrize("plat", ["linux", "freebsd", "openbsd", "netbsd", "wasi"])
     def test_posix_uses_ld(self, plat):
         assert act._lib_var_for_platform(plat) == "LD_LIBRARY_PATH"
 
@@ -65,7 +63,7 @@ class TestRendering:
     def test_cmd_render(self, tmp_path):
         text = act.render_cmd(tmp_path / "p", prompt="p")
         assert "CVCPKG_ACTIVE_PREFIX" in text
-        assert "set \"PATH=" in text
+        assert 'set "PATH=' in text
         assert "__CVCPKG_" not in text
 
     def test_cmd_deactivate_render(self):
@@ -163,9 +161,7 @@ echo "CMAKE_AFTER=${{CMAKE_PREFIX_PATH-unset}}"
 echo "LIB_AFTER=${{LD_LIBRARY_PATH-unset}}"
 echo "ACTIVE_AFTER=${{CVCPKG_ACTIVE_PREFIX-unset}}"
 """
-        result = subprocess.run(
-            [bash, "-c", script], capture_output=True, text=True, check=True
-        )
+        result = subprocess.run([bash, "-c", script], capture_output=True, text=True, check=True)
         out = result.stdout
         assert f"AFTER_ACTIVATE_PATH={prefix}/bin" in out
         assert f"CMAKE={prefix}" in out
@@ -190,8 +186,6 @@ echo "ACTIVE_AFTER=${{CVCPKG_ACTIVE_PREFIX-unset}}"
         written = act.write_activate_scripts(prefix, platform="linux")
         activate = next(p for p in written if p.name == "activate")
 
-        result = subprocess.run(
-            [bash, str(activate)], capture_output=True, text=True
-        )
+        result = subprocess.run([bash, str(activate)], capture_output=True, text=True)
         assert result.returncode == 33
         assert "must be sourced" in result.stderr
