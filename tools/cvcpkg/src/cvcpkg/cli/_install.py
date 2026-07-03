@@ -8,19 +8,19 @@ from pathlib import Path
 
 import click
 
-from cvcpkg.cli._helpers import (
-    _platform_opt,
-    _config_opt,
-    _link_opt,
-    _prefix_opt,
-    _recipes_dir_opt,
-    _no_default_recipes_opt,
-    _local_opt,
-    _resolve_recipes_dirs,
-    _VALID_ARCHES,
-)
 from cvcpkg.cli import cli
 from cvcpkg.cli._catalog import _fetch_mirror_urls
+from cvcpkg.cli._helpers import (
+    _VALID_ARCHES,
+    _config_opt,
+    _link_opt,
+    _local_opt,
+    _no_default_recipes_opt,
+    _platform_opt,
+    _prefix_opt,
+    _recipes_dir_opt,
+    _resolve_recipes_dirs,
+)
 
 # ── install ─────────────────────────────────────────────────────
 

@@ -28,7 +28,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-
 # ── template payloads ──────────────────────────────────────────────
 #
 # Each template uses a small set of substitutions:
