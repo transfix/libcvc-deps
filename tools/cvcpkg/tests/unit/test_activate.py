@@ -128,6 +128,10 @@ class TestWriteActivateScripts:
 class TestBashSemantics:
     """Sanity-check the generated bash script actually runs."""
 
+    @pytest.mark.skipif(
+        __import__("sys").platform == "win32",
+        reason="MSYS bash on Windows mangles native paths; separator collision with C:\\",
+    )
     def test_bash_activate_deactivate_cycle(self, tmp_path):
         import shutil
         import subprocess
