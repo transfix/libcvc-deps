@@ -147,4 +147,3 @@ class TestResolverDeps:
         }
         result = resolve(reqs, candidates)
         assert result.picked["zlib"].version == "1.3.1+cvc.1"
-
