@@ -22,6 +22,15 @@ patches: []
 depends:
   build:
     - qt6
+    - qtshadertools
+    # FFmpeg is Qt Multimedia's default backend on Qt 6.8 (all desktop
+    # platforms).  PipeWire and GStreamer are additional Linux backends.
+    - name: ffmpeg
+      platforms: [linux, macos]
+    - name: pipewire
+      platforms: [linux]
+    - name: gstreamer
+      platforms: [linux, macos]
   runtime: []
   host_tools:
     - cmake
