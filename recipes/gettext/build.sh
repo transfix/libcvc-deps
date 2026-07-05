@@ -18,13 +18,12 @@ CONFIGURE_ARGS=(
     --without-xz
 )
 
-# macOS ships libiconv separately; tell configure where to find it
-# so libtextstyle's iconv-ostream support compiles correctly.
-case "$(uname -s)" in
-    Darwin)
-        CONFIGURE_ARGS+=(--with-libiconv-prefix=/usr)
-        ;;
-esac
+# NOTE: do NOT pass --with-libiconv-prefix on macOS.  Pointing gettext at
+# the system libiconv (/usr) makes gnulib's "working iconv" test fail
+# (macOS's iconv is not GNU libiconv), which leaves libtextstyle referencing
+# iconv_ostream_create without ever compiling the object that defines it ->
+# an arm64 link error.  Letting gnulib auto-detect keeps HAVE_ICONV
+# internally consistent, exactly as on the BSDs where no prefix is passed.
 
 # Respect static/shared link mode.
 if [[ "${CVC_LINK:-shared}" == "static" ]]; then
