@@ -42,6 +42,14 @@ if [[ "${CVC_LINK:-shared}" == "static" ]]; then
     )
 fi
 
+# FFmpeg's configure hard-defaults its C compiler to "gcc" and does not
+# reliably honour $CC.  On the BSDs (and macOS) the system compiler is
+# clang exposed as cc, so pass the platform-selected compiler explicitly.
+CONFIGURE_ARGS+=(--cc="${CC:-cc}")
+if [[ -n "${CXX:-}" ]]; then
+    CONFIGURE_ARGS+=(--cxx="${CXX}")
+fi
+
 # On platforms without nasm on PATH, fall back to disabling x86 asm so
 # the build still succeeds (nasm is only declared as a build dep on
 # linux/BSD; macOS runners ship their own assembler toolchain).
