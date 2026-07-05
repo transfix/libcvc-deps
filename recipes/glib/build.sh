@@ -45,6 +45,7 @@ cd "${CVC_SOURCE_DIR}"
 meson setup "${CVC_BUILD_DIR}" \
     --prefix="${CVC_INSTALL_DIR}" \
     --buildtype=release \
+    --libdir=lib \
     --default-library="${_default_lib}" \
     --pkg-config-path="${CVC_DEPS_PREFIX}/lib/pkgconfig" \
     -Dc_link_args="${_rpath_flags}" \
