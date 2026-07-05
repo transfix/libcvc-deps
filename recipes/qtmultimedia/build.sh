@@ -12,6 +12,16 @@ export LD_LIBRARY_PATH="${CVC_DEPS_PREFIX}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_P
 
 cd "${CVC_SOURCE_DIR}"
 
+# Qt module plugins (ffmpeg, gstreamer) call qt_find_package(EGL), which
+# Qt resolves through its "PlatformGraphics" package.  Its find module
+# lives in <qt>/lib/cmake/Qt6/platforms/ — a directory that Qt only adds
+# to CMAKE_MODULE_PATH when you build via its toolchain file / qt-cmake.
+# In this plain find_package(Qt6) build it isn't on the path, so
+# find_package(PlatformGraphics) errors and both backend plugins get
+# skipped (leaving qtmultimedia without any media backend).  Seed the
+# platforms dir so the (soft) EGL lookup resolves and the plugins build.
+_qt_platforms_dir="${CVC_DEPS_PREFIX}/lib/cmake/Qt6/platforms"
+
 # Backend selection (Linux): Qt 6.8 gates its FFmpeg media backend on a
 # low-level audio backend that, on Linux, means PulseAudio
 # (QT_FEATURE_pulseaudio).  We don't ship libpulse, so the FFmpeg backend
@@ -29,6 +39,7 @@ cmake -G Ninja \
     -DCMAKE_INSTALL_PREFIX="${CVC_INSTALL_DIR}" \
     -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}" \
     -DBUILD_SHARED_LIBS="${BUILD_SHARED_LIBS}" \
+    -DCMAKE_MODULE_PATH="${_qt_platforms_dir}" \
     -DQT_BUILD_EXAMPLES=OFF \
     -DQT_BUILD_TESTS=OFF \
     -DQT_BUILD_BENCHMARKS=OFF \
