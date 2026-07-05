@@ -16,6 +16,14 @@ export PATH="${CVC_DEPS_PREFIX}/bin:${PATH}"
 export PKG_CONFIG_PATH="${CVC_DEPS_PREFIX}/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
 export LD_LIBRARY_PATH="${CVC_DEPS_PREFIX}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 
+# cvcpkg's bison bakes its build-time prefix into the binary as the
+# location of its m4 skeletons (share/bison/m4sugar/…).  Once relocated
+# into the shared deps prefix that path no longer exists, so bison fails
+# with "m4sugar.m4: cannot open".  Point it at the real skeleton dir.
+if [[ -d "${CVC_DEPS_PREFIX}/share/bison" ]]; then
+    export BISON_PKGDATADIR="${CVC_DEPS_PREFIX}/share/bison"
+fi
+
 if [[ "${CVC_PLATFORM}" == "macos" ]]; then
     _rpath_flags="-Wl,-rpath,@loader_path"
 else
@@ -29,6 +37,7 @@ meson setup "${CVC_BUILD_DIR}" \
     --buildtype=release \
     --libdir=lib \
     --pkg-config-path="${CVC_DEPS_PREFIX}/lib/pkgconfig" \
+    --wrap-mode=nofallback \
     -Dc_link_args="${_rpath_flags}" \
     -Dcpp_link_args="${_rpath_flags}" \
     -Dbase=enabled \
