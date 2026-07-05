@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: gstreamer
   upstream_version: "1.24.13"
-  cvc_revision: 1
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -12,10 +12,10 @@ recipe:
   description: >-
     GStreamer — a pipeline-based multimedia framework.  Built from the
     upstream mono-repository as core + gst-plugins-base + gst-plugins-good
-    (LGPL only; bad/ugly/libav and all GPL-encumbered plugins disabled),
-    providing the gstreamer-1.0 / gstreamer-app / gstreamer-audio /
-    gstreamer-video / gstreamer-pbutils libraries Qt Multimedia's
-    GStreamer backend links against on Linux and macOS.
+    + gst-plugins-bad (LGPL; ugly/libav and all GPL-encumbered plugins
+    disabled), providing the gstreamer-1.0 / gstreamer-app / gstreamer-audio /
+    gstreamer-video / gstreamer-pbutils / gstreamer-play libraries Qt
+    Multimedia's GStreamer backend links against on Linux and macOS.
 
 source:
   type: tarball
@@ -68,6 +68,7 @@ package:
     - gstreamer-video-1.0
     - gstreamer-pbutils-1.0
     - gstreamer-allocators-1.0
+    - gstreamer-play-1.0
 
 abi:
   cxx_std: 17

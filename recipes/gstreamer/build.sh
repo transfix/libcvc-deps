@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# recipes/gstreamer/build.sh — build GStreamer (core + base + good) on
-# Linux and macOS from the upstream mono-repository with Meson.
+# recipes/gstreamer/build.sh — build GStreamer (core + base + good + bad)
+# on Linux and macOS from the upstream mono-repository with Meson.
 #
-# We enable only the LGPL subprojects Qt Multimedia needs and disable the
-# bad/ugly/libav plugin sets, bindings, dev tools, docs and tests.  This
-# keeps the build self-contained (its only external dependency is GLib,
-# which we build as a recipe) and free of GPL-encumbered plugins.
+# We enable the base/good/bad subprojects and disable ugly/libav,
+# bindings, dev tools, docs and tests.  gst-plugins-bad is enabled
+# primarily for its gstreamer-play-1.0 library (libgstplay), which Qt
+# Multimedia's GStreamer backend requires; --wrap-mode=nofallback keeps
+# it lean by disabling any bad plugin whose external deps are absent.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -43,7 +44,7 @@ meson setup "${CVC_BUILD_DIR}" \
     -Dbase=enabled \
     -Dgood=enabled \
     -Dugly=disabled \
-    -Dbad=disabled \
+    -Dbad=enabled \
     -Dlibav=disabled \
     -Ddevtools=disabled \
     -Dges=disabled \
