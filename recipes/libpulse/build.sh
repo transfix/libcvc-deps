@@ -26,6 +26,8 @@ meson setup "${CVC_BUILD_DIR}" \
     -Dc_link_args="-Wl,-rpath,\$ORIGIN" \
     -Ddaemon=false \
     -Dclient=true \
+    -Dbashcompletiondir="${CVC_INSTALL_DIR}/share/bash-completion/completions" \
+    -Dzshcompletiondir="${CVC_INSTALL_DIR}/share/zsh/site-functions" \
     -Ddoxygen=false \
     -Dman=false \
     -Dtests=false \

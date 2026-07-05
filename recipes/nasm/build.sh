@@ -13,9 +13,20 @@ set -euo pipefail
 
 cd "${CVC_SOURCE_DIR}"
 
+# NASM's Makefile uses GNU-make syntax (ifeq/endif), which the BSD
+# make(1) cannot parse — use gmake there.
+MAKE=make
+case "$(uname -s)" in
+    FreeBSD|OpenBSD|NetBSD|DragonFly)
+        if command -v gmake >/dev/null 2>&1; then
+            MAKE=gmake
+        fi
+        ;;
+esac
+
 ./configure --prefix="${CVC_INSTALL_DIR}"
 
 # `install` copies the nasm/ndisasm executables plus the pre-built man
 # pages that ship in the release tarball (no doc toolchain required).
-make -j "${CVC_JOBS}"
-make install
+"${MAKE}" -j "${CVC_JOBS}"
+"${MAKE}" install
