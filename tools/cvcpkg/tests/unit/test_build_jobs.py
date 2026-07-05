@@ -119,9 +119,7 @@ class TestDbBuildJobStore:
                 recipe_version="1.3.1",
             )
             # min_age_seconds=0 → every pending job is past the grace period.
-            reaped = await store.reap_unschedulable(
-                {("linux", "x86_64")}, set(), min_age_seconds=0
-            )
+            reaped = await store.reap_unschedulable({("linux", "x86_64")}, set(), min_age_seconds=0)
             reaped_ids = {j.id for j in reaped}
             assert orphan.id in reaped_ids
             assert served.id not in reaped_ids

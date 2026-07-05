@@ -850,9 +850,7 @@ def builds_submit_dag(
                 continue
             # Skip combos no registered builder can serve.
             if _builder_check and not _has_builder(plat, ar):
-                click.echo(
-                    f"  Skipping {plat}/{ar}: no registered builder can serve it"
-                )
+                click.echo(f"  Skipping {plat}/{ar}: no registered builder can serve it")
                 continue
             for cfg in configs:
                 for lnk in links:

@@ -2570,9 +2570,7 @@ class DbBuildJobStore:
             total = len(rows)
             succeeded = sum(1 for r in rows if r.status == BuildJobStatus.succeeded)
             failed = sum(1 for r in rows if r.status == BuildJobStatus.failed)
-            unschedulable = sum(
-                1 for r in rows if r.status == BuildJobStatus.unschedulable
-            )
+            unschedulable = sum(1 for r in rows if r.status == BuildJobStatus.unschedulable)
             return {
                 "dag_id": dag_id,
                 "total": total,
@@ -2797,9 +2795,7 @@ class DbBuildJobStore:
                     continue
                 row.status = BuildJobStatus.unschedulable
                 row.finished_at = now
-                row.error_message = (
-                    f"no registered builder for {row.platform}/{row.arch}"
-                )
+                row.error_message = f"no registered builder for {row.platform}/{row.arch}"
                 dep_ids = await self._load_dep_ids(session, row.id)
                 reaped.append(self._row_to_info(row, dep_ids))
             return reaped
