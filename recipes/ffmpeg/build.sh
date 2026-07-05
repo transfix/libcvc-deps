@@ -58,11 +58,13 @@ if ! command -v nasm >/dev/null 2>&1; then
 fi
 
 # Relocatable RPATH so the sibling libav* shared libs resolve within any
-# install prefix (the temporary build prefix is cleaned up post-build).
+# install prefix.  On macOS "@loader_path" is a literal token that
+# survives FFmpeg's configure, so pass it via --extra-ldflags.  On ELF
+# platforms "$ORIGIN" gets expanded to an empty string by FFmpeg's
+# configure shell (which then breaks the linker probe under lld on the
+# BSDs), so we stamp the RPATH after install with patchelf instead.
 if [[ "${CVC_PLATFORM}" == "macos" ]]; then
     CONFIGURE_ARGS+=(--extra-ldflags="-Wl,-rpath,@loader_path")
-else
-    CONFIGURE_ARGS+=(--extra-ldflags="-Wl,-rpath,\$ORIGIN")
 fi
 
 ./configure "${CONFIGURE_ARGS[@]}" || {
@@ -73,6 +75,20 @@ fi
 
 make -j "${CVC_JOBS}"
 make install
+
+# ELF platforms: stamp $ORIGIN into each installed libav*/libsw* so they
+# find their siblings in the same lib dir regardless of the final prefix.
+# patchelf is present on the Linux builders; if it is absent (e.g. some
+# BSD runners) consumers fall back to their own RPATH / the cvcpkg
+# activate LD path.
+if [[ "${CVC_PLATFORM}" != "macos" ]] && command -v patchelf >/dev/null 2>&1; then
+    shopt -s nullglob
+    for _so in "${CVC_INSTALL_DIR}"/lib/lib{av,sw}*.so*; do
+        [[ -L "${_so}" ]] && continue
+        patchelf --set-rpath '$ORIGIN' "${_so}" || true
+    done
+    shopt -u nullglob
+fi
 
 # On macOS, FFmpeg stamps each dylib's LC_ID_DYLIB with the absolute
 # install path and references siblings by absolute path too.  Rewrite
