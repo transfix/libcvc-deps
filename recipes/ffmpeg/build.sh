@@ -73,8 +73,19 @@ fi
     exit 1
 }
 
-make -j "${CVC_JOBS}"
-make install
+# FFmpeg's Makefile relies on GNU-make features, so build with gmake on
+# the BSDs (their make(1) cannot parse it).
+MAKE=make
+case "$(uname -s)" in
+    FreeBSD|OpenBSD|NetBSD|DragonFly)
+        if command -v gmake >/dev/null 2>&1; then
+            MAKE=gmake
+        fi
+        ;;
+esac
+
+"${MAKE}" -j "${CVC_JOBS}"
+"${MAKE}" install
 
 # ELF platforms: stamp $ORIGIN into each installed libav*/libsw* so they
 # find their siblings in the same lib dir regardless of the final prefix.
