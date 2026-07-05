@@ -22,16 +22,11 @@ cd "${CVC_SOURCE_DIR}"
 # platforms dir so the (soft) EGL lookup resolves and the plugins build.
 _qt_platforms_dir="${CVC_DEPS_PREFIX}/lib/cmake/Qt6/platforms"
 
-# Backend selection (Linux): Qt 6.8 gates its FFmpeg media backend on a
-# low-level audio backend that, on Linux, means PulseAudio
-# (QT_FEATURE_pulseaudio).  We don't ship libpulse, so the FFmpeg backend
-# cannot be enabled here — build the GStreamer backend instead (GStreamer
-# handles its own audio).  The FFmpeg *libraries* are still published as
-# their own bundle for other consumers.
-_backend_flags=()
-if [[ "${CVC_PLATFORM}" == "linux" ]]; then
-    _backend_flags+=(-DFEATURE_ffmpeg=OFF)
-fi
+# Backend selection: Qt 6.8 gates its FFmpeg media backend on a low-level
+# audio backend — on Linux that means PulseAudio (QT_FEATURE_pulseaudio),
+# which we now provide via the libpulse recipe.  With libpulse present Qt
+# auto-enables BOTH the FFmpeg and GStreamer backends, so we let feature
+# auto-detection decide rather than forcing anything.
 
 cmake -G Ninja \
     -S "${CVC_SOURCE_DIR}" \
@@ -42,8 +37,7 @@ cmake -G Ninja \
     -DCMAKE_MODULE_PATH="${_qt_platforms_dir}" \
     -DQT_BUILD_EXAMPLES=OFF \
     -DQT_BUILD_TESTS=OFF \
-    -DQT_BUILD_BENCHMARKS=OFF \
-    "${_backend_flags[@]}"
+    -DQT_BUILD_BENCHMARKS=OFF
 cmake --build "${CVC_BUILD_DIR}" -j "${CVC_JOBS}"
 cmake --install "${CVC_BUILD_DIR}"
 
