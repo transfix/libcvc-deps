@@ -12,6 +12,17 @@ export LD_LIBRARY_PATH="${CVC_DEPS_PREFIX}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_P
 
 cd "${CVC_SOURCE_DIR}"
 
+# Backend selection (Linux): Qt 6.8 gates its FFmpeg media backend on a
+# low-level audio backend that, on Linux, means PulseAudio
+# (QT_FEATURE_pulseaudio).  We don't ship libpulse, so the FFmpeg backend
+# cannot be enabled here — build the GStreamer backend instead (GStreamer
+# handles its own audio).  The FFmpeg *libraries* are still published as
+# their own bundle for other consumers.
+_backend_flags=()
+if [[ "${CVC_PLATFORM}" == "linux" ]]; then
+    _backend_flags+=(-DFEATURE_ffmpeg=OFF)
+fi
+
 cmake -G Ninja \
     -S "${CVC_SOURCE_DIR}" \
     -B "${CVC_BUILD_DIR}" \
@@ -21,7 +32,7 @@ cmake -G Ninja \
     -DQT_BUILD_EXAMPLES=OFF \
     -DQT_BUILD_TESTS=OFF \
     -DQT_BUILD_BENCHMARKS=OFF \
-    -DFEATURE_ffmpeg=ON
+    "${_backend_flags[@]}"
 cmake --build "${CVC_BUILD_DIR}" -j "${CVC_JOBS}"
 cmake --install "${CVC_BUILD_DIR}"
 
