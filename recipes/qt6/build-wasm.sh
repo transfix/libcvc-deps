@@ -26,6 +26,7 @@ CMAKE_PREFIX_PATH="" cmake -G Ninja \
     -DCMAKE_INSTALL_PREFIX="${CVC_BUILD_DIR}/host-qt-install" \
     -DCMAKE_BUILD_TYPE=Release \
     -DBUILD_SHARED_LIBS=OFF \
+    -DFEATURE_icu=OFF \
     -DQT_BUILD_EXAMPLES=OFF \
     -DQT_BUILD_TESTS=OFF \
     -DQT_BUILD_BENCHMARKS=OFF
@@ -48,6 +49,7 @@ cmake -G Ninja \
     -DCMAKE_TOOLCHAIN_FILE="${EMSDK}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake" \
     -DQT_HOST_PATH="${CVC_BUILD_DIR}/host-qt-install" \
     -DFEATURE_thread=OFF \
+    -DFEATURE_icu=OFF \
     -DQT_BUILD_EXAMPLES=OFF \
     -DQT_BUILD_TESTS=OFF \
     -DQT_BUILD_BENCHMARKS=OFF \
