@@ -83,6 +83,12 @@ jobs:
       - name: Install build tools
         run: pip install build twine
 
+      - name: Bundle recipes into package
+        run: |
+          rm -rf src/cvcpkg/recipes/*
+          cp -r recipes/* src/cvcpkg/recipes/ 2>/dev/null || true
+          rm -f src/cvcpkg/recipes/.gitignore
+
       - name: Build sdist and wheel
         working-directory: .
         run: python -m build
