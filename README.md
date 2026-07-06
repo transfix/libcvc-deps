@@ -26,7 +26,7 @@ Every archive contains, in one tree:
 - libyaml 0.2.x C parser/emitter for YAML configuration files
 - Protocol Buffers + gRPC C++ runtime and code-generation tools
 - CGAL + GMP + MPFR
-- ImageMagick (Q16-HDRI; Windows uses the [overlay port](vcpkg-overlay/ports/imagemagick))
+- ImageMagick (Q16-HDRI)
 
 **volrover3 deps**
 
