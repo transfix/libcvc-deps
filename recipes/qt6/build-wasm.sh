@@ -70,6 +70,14 @@ for tool in moc rcc uic qmake6; do
     done
 done
 
+# Preserve the full host-native Qt install tree alongside the wasm output
+# so downstream Qt submodules (qtshadertools, qtmultimedia, …) can
+# cross-compile against this bundle: their build passes QT_HOST_PATH to
+# this tree.  Qt's cross-build needs the mkspecs, cmake config files,
+# libexec host tools, and internal headers — not just the four binaries
+# copied above.
+cp -a "${CVC_BUILD_DIR}/host-qt-install" "${CVC_INSTALL_DIR}/host-qt"
+
 echo "Qt 6 wasm_singlethread installed to ${CVC_INSTALL_DIR}"
 
 # Ensure installed .pc/.cmake files are relocatable.
