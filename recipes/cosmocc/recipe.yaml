@@ -16,6 +16,17 @@ recipe:
   license: ISC
   tags: [toolchain, cosmo]
 
+# Register cosmocc as the toolchain provider for the "cosmo" target
+# platform.  cvcpkg's _discover_cross_toolchains() reads this block to
+# auto-install cosmocc as a host tool whenever a recipe with a
+# `platform: cosmo` matrix entry is built.  Consumers using
+# `cvcpkg install --platform cosmo` get the toolchain pulled in the
+# same way emsdk is pulled for wasm and wasi-sdk for wasi.
+cross_toolchain:
+  target_platforms: [cosmo]
+  env:
+    CVC_COSMOCC_DIR: "${PREFIX}/cosmocc"
+
 source:
   type: tarball
   url: https://cosmo.zip/pub/cosmocc/cosmocc.zip
@@ -32,16 +43,22 @@ depends:
   host_tools: []
 
 build:
+  build_type_independent: true
   matrix:
     # cosmocc.zip is host-agnostic — the same binaries run on Linux,
     # macOS, Windows, and BSDs — but we still publish per-host bundles
-    # so consumers on each platform get a bundle picked up cleanly by
-    # `cvcpkg install`.  Linux is the first (and only) host that runs
-    # our populate-server DAG builders today; macos/windows can follow.
+    # so consumers on each platform get a native install path picked
+    # up cleanly by `cvcpkg install`.
     - platform: linux
       script: build.sh
       env:
         CFLAGS: "-O2"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
 
 package:
   files:
