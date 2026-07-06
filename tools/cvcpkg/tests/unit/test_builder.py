@@ -518,7 +518,17 @@ class TestPlatformAny:
         recipe_dir = tmp_path / "recipes" / "web-assets"
         _write_recipe(recipe_dir, ANY_RECIPE)
         r = Recipe.load(recipe_dir)
-        for plat in ["linux", "macos", "windows", "wasm", "wasi", "cosmo", "freebsd", "openbsd", "netbsd"]:
+        for plat in [
+            "linux",
+            "macos",
+            "windows",
+            "wasm",
+            "wasi",
+            "cosmo",
+            "freebsd",
+            "openbsd",
+            "netbsd",
+        ]:
             m = _select_matrix_entry(r, plat)
             assert m.platform == "any", f"Expected 'any' for {plat}"
 
