@@ -42,12 +42,26 @@ esac
 
 export PKG_CONFIG_PATH="${CVC_DEPS_PREFIX}/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
 export CPPFLAGS="-I${CVC_DEPS_PREFIX}/include ${CPPFLAGS:-}"
-export LDFLAGS="-L${CVC_DEPS_PREFIX}/lib -Wl,-rpath,${RPATH_SELF} ${LDFLAGS:-}"
+if [ "$IS_CROSS" = false ]; then
+    export LDFLAGS="-L${CVC_DEPS_PREFIX}/lib -Wl,-rpath,${RPATH_SELF} ${LDFLAGS:-}"
+fi
 
 # On macOS ensure the deployment target is propagated.
 if [[ "${CVC_PLATFORM}" == "macos" ]]; then
     export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-13.0}"
 fi
+
+# --- Detect cross-compile targets ---
+# wasm / wasi / cosmo: static builds with a cross host triple.
+# Native platforms (linux, macos, freebsd, openbsd, netbsd, windows) use
+# the native toolchain with shared libraries.
+IS_CROSS=false
+CROSS_HOST=""
+case "${CVC_PLATFORM}" in
+    wasm)   IS_CROSS=true; CROSS_HOST="wasm32-emscripten" ;;
+    wasi)   IS_CROSS=true; CROSS_HOST="wasm32-wasi" ;;
+    cosmo)  IS_CROSS=true; CROSS_HOST="x86_64-cosmo" ;;
+esac
 
 # --- Configure flags ---
 CONFIGURE_ARGS=(
@@ -60,15 +74,23 @@ CONFIGURE_ARGS=(
     # OpenSSL build) means CA verification uses the host system trust store.
     --with-openssl="${CVC_DEPS_PREFIX}"
     --with-ssl-default-suites=openssl
-    # Use the wide-char ncurses (libncursesw) for curses + readline.
-    --with-readline=readline
     # Install to versioned paths: lib/python3.X/, bin/python3.X, etc.
     # Multiple Python minor versions coexist in the same prefix this way.
     --enable-ipv6
 )
 
+# Cross-compilation targets: static-only, explicit host, no readline.
+if [ "$IS_CROSS" = true ]; then
+    CONFIGURE_ARGS+=(--disable-shared --host="${CROSS_HOST}")
+    # readline/ncurses not available on wasm/wasi/cosmo.
+    CONFIGURE_ARGS+=(--with-readline=tkinter)
+else
+    # Use the wide-char ncurses (libncursesw) for curses + readline.
+    CONFIGURE_ARGS+=(--with-readline=readline)
+fi
+
 # Enable PGO on platforms where it's supported and reliable.
-# Disabled on BSD variants because their clang versions differ.
+# Disabled on BSD and cross-compile variants.
 case "${CVC_PLATFORM}" in
     linux)
         CONFIGURE_ARGS+=(--enable-optimizations)
@@ -78,36 +100,33 @@ case "${CVC_PLATFORM}" in
         ;;
 esac
 
-# Static link mode: build libpython as a static archive instead of .so.
-# This is uncommon for Python (breaks extension modules) so we always
-# build shared; the CVC_LINK flag only controls the recipe DAG metadata.
-# Python extension modules (.so) must link against libpython.so anyway.
-
 ./configure "${CONFIGURE_ARGS[@]}"
 
 $MAKE -j "${CVC_JOBS}"
 $MAKE install
 
-# --- Relocatable RPATH post-fixup ---
+# --- Relocatable RPATH post-fixup (native only) ---
 # CPython's Makefile bakes the absolute build-time LDFLAGS rpath; patch
 # the installed binary so it uses $ORIGIN-relative paths instead.
-PY_BIN="${CVC_INSTALL_DIR}/bin/python${PYTHON_MINOR}"
-if command -v patchelf >/dev/null 2>&1 && [[ "${CVC_PLATFORM}" != "macos" ]]; then
-    patchelf --set-rpath "\$ORIGIN/../lib" "${PY_BIN}" 2>/dev/null || true
-    # Patch extension modules so they find libpython.
-    find "${CVC_INSTALL_DIR}/lib/python${PYTHON_MINOR}" -name '*.so' -print0 \
-        | xargs -0 -I{} patchelf --set-rpath "\$ORIGIN/../../.." {} 2>/dev/null || true
-fi
+if [ "$IS_CROSS" = false ]; then
+    PY_BIN="${CVC_INSTALL_DIR}/bin/python${PYTHON_MINOR}"
+    if command -v patchelf >/dev/null 2>&1 && [[ "${CVC_PLATFORM}" != "macos" ]]; then
+        patchelf --set-rpath "\$ORIGIN/../lib" "${PY_BIN}" 2>/dev/null || true
+        # Patch extension modules so they find libpython.
+        find "${CVC_INSTALL_DIR}/lib/python${PYTHON_MINOR}" -name '*.so' -print0 \
+            | xargs -0 -I{} patchelf --set-rpath "\$ORIGIN/../../.." {} 2>/dev/null || true
+    fi
 
-if [[ "${CVC_PLATFORM}" == "macos" ]]; then
-    # Fix install_name on the framework-less shared build.
-    DYLIB="${CVC_INSTALL_DIR}/lib/libpython${PYTHON_MINOR}.dylib"
-    if [[ -f "$DYLIB" ]]; then
-        install_name_tool -id "@rpath/libpython${PYTHON_MINOR}.dylib" "$DYLIB"
-        install_name_tool -change \
-            "${CVC_INSTALL_DIR}/lib/libpython${PYTHON_MINOR}.dylib" \
-            "@rpath/libpython${PYTHON_MINOR}.dylib" \
-            "${PY_BIN}" 2>/dev/null || true
+    if [[ "${CVC_PLATFORM}" == "macos" ]]; then
+        # Fix install_name on the framework-less shared build.
+        DYLIB="${CVC_INSTALL_DIR}/lib/libpython${PYTHON_MINOR}.dylib"
+        if [[ -f "$DYLIB" ]]; then
+            install_name_tool -id "@rpath/libpython${PYTHON_MINOR}.dylib" "$DYLIB"
+            install_name_tool -change \
+                "${CVC_INSTALL_DIR}/lib/libpython${PYTHON_MINOR}.dylib" \
+                "@rpath/libpython${PYTHON_MINOR}.dylib" \
+                "${PY_BIN}" 2>/dev/null || true
+        fi
     fi
 fi
 

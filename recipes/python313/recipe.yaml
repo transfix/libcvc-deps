@@ -74,6 +74,36 @@ build:
       script: build.sh
       env:
         CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
+      env:
+        CFLAGS: "-O2"
+    - platform: wasm
+      host_platform: macos
+      script: build-wasm.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: wasi
+      host_platform: linux
+      script: build-wasi.sh
+      env:
+        CFLAGS: "-O2"
+    - platform: cosmo
+      host_platform: linux
+      script: build-cosmo.sh
+      env:
+        CFLAGS: "-O2"
 
 package:
   files:
@@ -97,7 +127,8 @@ abi:
 
 notes:
   - title: "Multiple Python versions coexist"
-    platforms: [linux, macos, freebsd]
+    platforms:
+      [linux, macos, freebsd, openbsd, netbsd, windows, wasm, wasi, cosmo]
     description: >-
       python311, python312, and python313 install to versioned paths
       (bin/python3.13, lib/python3.13/, libpython3.13.so) and can be
@@ -109,3 +140,10 @@ notes:
       --disable-gil.  This recipe builds the standard GIL-enabled
       interpreter.  A separate python313t recipe can target the
       free-threaded variant when it matures.
+  - title: "Static builds on wasm/wasi/cosmo"
+    platforms: [wasm, wasi, cosmo]
+    description: >-
+      Cross-compilation targets build libpython as a static archive
+      (--disable-shared) since extension modules (.so) are uncommon.
+      Readline is disabled (--with-readline=tkinter) because the
+      ncurses/readline ecosystem is not available on these platforms.
