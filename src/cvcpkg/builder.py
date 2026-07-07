@@ -2414,7 +2414,7 @@ def collect_recipe_conflicts(
                     r = Recipe.load(rdir / name)
                     if r.conflicts:
                         conflicts.setdefault(name, []).extend(r.conflicts)
-                except RecipeError:
+                except Exception:
                     pass
     return conflicts
 

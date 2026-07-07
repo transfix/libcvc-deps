@@ -5104,3 +5104,305 @@ class TestBuildsMonitorCLI:
         assert "No active jobs" in out
         assert "Recent completed" in out
         assert "zlib" in out
+
+
+# ── Conflict detection ───────────────────────────────────────────
+
+
+def _make_conflict_catalog(tmp_path: Path) -> Path:
+    """Catalog with python313 and python313t entries for conflict testing."""
+    catalog = {
+        "schema_version": 1,
+        "revision": 1,
+        "bundles": [
+            {
+                "name": "python313",
+                "version": "3.13.3+cvc.1",
+                "upstream_version": "3.13.3",
+                "cvc_revision": 1,
+                "platform": "linux",
+                "arch": "x86_64",
+                "build_type": "release",
+                "link": "shared",
+                "sha256": "aaa111",
+                "size_bytes": 20000000,
+                "archive_url": "",
+                "source_release": "v3.13.3",
+            },
+            {
+                "name": "python313t",
+                "version": "3.13.3+cvc.1",
+                "upstream_version": "3.13.3",
+                "cvc_revision": 1,
+                "platform": "linux",
+                "arch": "x86_64",
+                "build_type": "release",
+                "link": "shared",
+                "sha256": "bbb222",
+                "size_bytes": 20000000,
+                "archive_url": "",
+                "source_release": "v3.13.3",
+            },
+        ],
+    }
+    p = tmp_path / "catalog.yaml"
+    p.write_text(yaml.dump(catalog, default_flow_style=False))
+    return p
+
+
+def _make_recipes_dir(tmp_path: Path) -> Path:
+    """Recipes dir with python313 and python313t declaring mutual conflicts."""
+    import yaml as _yaml
+
+    def _recipe(name: str, conflicts: list) -> dict:
+        d = {
+            "schema_version": 1,
+            "recipe": {
+                "name": name,
+                "upstream_version": "3.13.3",
+                "cvc_revision": 1,
+            },
+            "source": {"type": "vendored", "path": f"third-party/{name}"},
+            "patches": [],
+            "build": {
+                "matrix": [{"platform": "linux", "script": "build.sh"}],
+            },
+            "package": {"files": ["lib/*", "include/*"], "cmake_packages": []},
+        }
+        if conflicts:
+            d["conflicts"] = conflicts
+        return d
+
+    rd = tmp_path / "recipes"
+    for name, confs in [("python313", ["python313t"]), ("python313t", ["python313"])]:
+        pkg_dir = rd / name
+        pkg_dir.mkdir(parents=True, exist_ok=True)
+        (pkg_dir / "recipe.yaml").write_text(
+            _yaml.dump(_recipe(name, confs), default_flow_style=False)
+        )
+    return rd
+
+
+def _write_lockfile(prefix: Path, bundles: list[str]) -> None:
+    """Write a minimal lockfile with the given bundle names pre-installed."""
+    from cvcpkg.lockfile import LockEntry, Lockfile
+
+    lock = Lockfile(
+        platform="linux",
+        arch="x86_64",
+        config="release",
+        link="shared",
+        bundles=[
+            LockEntry(name=b, version="3.13.3+cvc.1", upstream_version="3.13.3") for b in bundles
+        ],
+    )
+    lock.write(prefix / "share" / "libcvc-deps" / "lockfile.yaml")
+
+
+class TestCheckConflicts:
+    """Direct unit tests for cvcpkg.cli._install._check_conflicts."""
+
+    def _fn(self):
+        from cvcpkg.cli._install import _check_conflicts
+
+        return _check_conflicts
+
+    def test_no_recipe_dirs_is_noop(self, tmp_path):
+        self._fn()(["python313", "python313t"], tmp_path, None)
+
+    def test_empty_installing_is_noop(self, tmp_path):
+        rd = _make_recipes_dir(tmp_path)
+        self._fn()([], tmp_path, [rd])
+
+    def test_no_conflict_packages_passes(self, tmp_path):
+        rd = _make_recipes_dir(tmp_path)
+        # zlib has no recipe → no conflicts
+        self._fn()(["zlib"], tmp_path, [rd])
+
+    def test_co_install_conflict_raises(self, tmp_path):
+        import click
+
+        rd = _make_recipes_dir(tmp_path)
+        with pytest.raises(click.ClickException) as exc_info:
+            self._fn()(["python313", "python313t"], tmp_path, [rd])
+        msg = exc_info.value.format_message()
+        assert "python313" in msg
+        assert "python313t" in msg
+        assert "conflicts" in msg.lower()
+
+    def test_installed_conflict_raises(self, tmp_path):
+        import click
+
+        rd = _make_recipes_dir(tmp_path)
+        prefix = tmp_path / "prefix"
+        _write_lockfile(prefix, ["python313"])
+        with pytest.raises(click.ClickException) as exc_info:
+            self._fn()(["python313t"], prefix, [rd])
+        msg = exc_info.value.format_message()
+        assert "python313t" in msg
+        assert "python313" in msg
+        assert "uninstall" in msg.lower()
+
+    def test_installed_conflict_includes_prefix_hint(self, tmp_path):
+        import click
+
+        rd = _make_recipes_dir(tmp_path)
+        prefix = tmp_path / "myprefix"
+        _write_lockfile(prefix, ["python313"])
+        with pytest.raises(click.ClickException) as exc_info:
+            self._fn()(["python313t"], prefix, [rd])
+        msg = exc_info.value.format_message()
+        assert str(prefix) in msg
+
+    def test_no_conflict_when_only_one_installed(self, tmp_path):
+        rd = _make_recipes_dir(tmp_path)
+        prefix = tmp_path / "prefix"
+        _write_lockfile(prefix, ["python313"])
+        # Installing python313 again (same package, no conflict with itself)
+        self._fn()(["python313"], prefix, [rd])
+
+    def test_no_conflict_when_lockfile_missing(self, tmp_path):
+        rd = _make_recipes_dir(tmp_path)
+        prefix = tmp_path / "prefix"
+        # prefix has no lockfile at all
+        self._fn()(["python313t"], prefix, [rd])
+
+    def test_corrupt_lockfile_silently_skipped(self, tmp_path):
+        rd = _make_recipes_dir(tmp_path)
+        prefix = tmp_path / "prefix"
+        lock_dir = prefix / "share" / "libcvc-deps"
+        lock_dir.mkdir(parents=True)
+        (lock_dir / "lockfile.yaml").write_text("not: valid: yaml: [{")
+        # Should not raise even with corrupt lockfile
+        self._fn()(["python313t"], prefix, [rd])
+
+
+class TestInstallConflictGating:
+    """Integration tests: install command raises on conflicting packages."""
+
+    def test_co_install_blocked(self, tmp_path, capsys):
+        """Installing python313 + python313t together must fail."""
+        cat = _make_conflict_catalog(tmp_path)
+        rd = _make_recipes_dir(tmp_path)
+        prefix = tmp_path / "prefix"
+        ret = main(
+            [
+                "install",
+                "python313",
+                "python313t",
+                "--catalog",
+                str(cat),
+                "--prefix",
+                str(prefix),
+                "--platform",
+                "linux",
+                "--arch",
+                "x86_64",
+                "--recipes-dir",
+                str(rd),
+            ]
+        )
+        assert ret != 0
+        err = capsys.readouterr().err
+        assert "conflicts" in err.lower()
+
+    def test_co_install_error_names_both_packages(self, tmp_path, capsys):
+        cat = _make_conflict_catalog(tmp_path)
+        rd = _make_recipes_dir(tmp_path)
+        prefix = tmp_path / "prefix"
+        main(
+            [
+                "install",
+                "python313",
+                "python313t",
+                "--catalog",
+                str(cat),
+                "--prefix",
+                str(prefix),
+                "--platform",
+                "linux",
+                "--arch",
+                "x86_64",
+                "--recipes-dir",
+                str(rd),
+            ]
+        )
+        err = capsys.readouterr().err
+        assert "python313" in err
+        assert "python313t" in err
+
+    def test_install_over_conflicting_installed_pkg_blocked(self, tmp_path, capsys):
+        """Installing python313t when python313 is in lockfile must fail."""
+        cat = _make_conflict_catalog(tmp_path)
+        rd = _make_recipes_dir(tmp_path)
+        prefix = tmp_path / "prefix"
+        _write_lockfile(prefix, ["python313"])
+        ret = main(
+            [
+                "install",
+                "python313t",
+                "--catalog",
+                str(cat),
+                "--prefix",
+                str(prefix),
+                "--platform",
+                "linux",
+                "--arch",
+                "x86_64",
+                "--recipes-dir",
+                str(rd),
+            ]
+        )
+        assert ret != 0
+        err = capsys.readouterr().err
+        assert "python313t" in err
+        assert "python313" in err
+        assert "uninstall" in err.lower()
+
+    def test_install_with_no_conflict_succeeds(self, tmp_path, capsys):
+        """Installing only python313 (no conflict) proceeds normally."""
+        cat = _make_conflict_catalog(tmp_path)
+        rd = _make_recipes_dir(tmp_path)
+        prefix = tmp_path / "prefix"
+        with mock.patch("cvcpkg.installer.install_entry"):
+            ret = main(
+                [
+                    "install",
+                    "python313",
+                    "--catalog",
+                    str(cat),
+                    "--prefix",
+                    str(prefix),
+                    "--platform",
+                    "linux",
+                    "--arch",
+                    "x86_64",
+                    "--recipes-dir",
+                    str(rd),
+                ]
+            )
+        assert ret == 0
+
+    def test_install_without_recipes_dir_skips_check(self, tmp_path, capsys):
+        """Without --recipes-dir the conflict check is silently skipped."""
+        cat = _make_conflict_catalog(tmp_path)
+        prefix = tmp_path / "prefix"
+        with mock.patch("cvcpkg.installer.install_entry"):
+            ret = main(
+                [
+                    "install",
+                    "python313",
+                    "python313t",
+                    "--catalog",
+                    str(cat),
+                    "--prefix",
+                    str(prefix),
+                    "--platform",
+                    "linux",
+                    "--arch",
+                    "x86_64",
+                    # no --recipes-dir: conflict check should be skipped
+                ]
+            )
+        # Should succeed (or at least not fail on conflicts)
+        assert ret == 0
