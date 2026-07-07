@@ -123,3 +123,6 @@ notes:
       The free-threaded build is not included for Windows (PCbuild) or
       cross-compilation targets (wasm/wasi/cosmo).  Use python313 for
       those platforms.
+
+conflicts:
+  - python313
