@@ -2314,9 +2314,11 @@ class DbBuildJobStore:
             # Build results with dep IDs (deduplicated)
             results = []
             for i, row in enumerate(created_rows):
-                real_dep_ids = list(dict.fromkeys(
-                    created_rows[di].id for di in idx_deps[i] if 0 <= di < len(created_rows)
-                ))
+                real_dep_ids = list(
+                    dict.fromkeys(
+                        created_rows[di].id for di in idx_deps[i] if 0 <= di < len(created_rows)
+                    )
+                )
                 results.append(self._row_to_info(row, real_dep_ids))
             return results
 
