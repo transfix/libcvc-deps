@@ -33,9 +33,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 RECIPES_DIR = REPO_ROOT / "recipes"
 REQUIREMENTS_FILE = REPO_ROOT / "cvc-requirements.yaml"
 
-requires_repo = pytest.mark.skipif(
-    not RECIPES_DIR.is_dir(), reason="Not running from repo"
-)
+requires_repo = pytest.mark.skipif(not RECIPES_DIR.is_dir(), reason="Not running from repo")
 
 
 # ── Helpers ──────────────────────────────────────────────────────
@@ -81,9 +79,7 @@ def _publish(client, token, name, version, **kwargs):
                             "build_type": build_type,
                             "link": link,
                         },
-                        "contents": {
-                            "files": [f"lib/lib{name}.so", f"include/{name}.h"]
-                        },
+                        "contents": {"files": [f"lib/lib{name}.so", f"include/{name}.h"]},
                     }
                 ).encode(),
             }
@@ -167,13 +163,17 @@ class TestRequirementsInstall:
 
         # Write a small requirements file
         req_file = tmp_path / "test-requirements.yaml"
-        req_file.write_text(yaml.dump({
-            "platform": "linux",
-            "arch": "x86_64",
-            "config": "release",
-            "link": "shared",
-            "components": ["zlib", "yaml"],
-        }))
+        req_file.write_text(
+            yaml.dump(
+                {
+                    "platform": "linux",
+                    "arch": "x86_64",
+                    "config": "release",
+                    "link": "shared",
+                    "components": ["zlib", "yaml"],
+                }
+            )
+        )
 
         # Fetch catalog and write locally
         resp = client.get("/v1/catalog")
@@ -205,30 +205,34 @@ class TestDummyRecipeBuild:
         """A minimal recipe.yaml can be loaded by the Recipe class."""
         recipe_dir = tmp_path / "hello"
         recipe_dir.mkdir()
-        (recipe_dir / "recipe.yaml").write_text(yaml.dump({
-            "schema_version": 1,
-            "recipe": {
-                "name": "hello",
-                "upstream_version": "1.0.0",
-                "cvc_revision": 1,
-                "description": "Dummy test recipe",
-                "homepage": "https://example.com",
-                "license": "MIT",
-            },
-            "source": {
-                "type": "tarball",
-                "url": "https://example.com/hello-1.0.0.tar.gz",
-                "sha256": "0" * 64,
-            },
-            "build": {
-                "matrix": [
-                    {
-                        "platform": "linux",
-                        "script": "build.sh",
+        (recipe_dir / "recipe.yaml").write_text(
+            yaml.dump(
+                {
+                    "schema_version": 1,
+                    "recipe": {
+                        "name": "hello",
+                        "upstream_version": "1.0.0",
+                        "cvc_revision": 1,
+                        "description": "Dummy test recipe",
+                        "homepage": "https://example.com",
+                        "license": "MIT",
                     },
-                ],
-            },
-        }))
+                    "source": {
+                        "type": "tarball",
+                        "url": "https://example.com/hello-1.0.0.tar.gz",
+                        "sha256": "0" * 64,
+                    },
+                    "build": {
+                        "matrix": [
+                            {
+                                "platform": "linux",
+                                "script": "build.sh",
+                            },
+                        ],
+                    },
+                }
+            )
+        )
         (recipe_dir / "build.sh").write_text("#!/bin/sh\necho hello\n")
 
         recipe = Recipe.load(recipe_dir)
@@ -242,46 +246,54 @@ class TestDummyRecipeBuild:
         # Create 'base' recipe
         base_dir = tmp_path / "base"
         base_dir.mkdir()
-        (base_dir / "recipe.yaml").write_text(yaml.dump({
-            "schema_version": 1,
-            "recipe": {
-                "name": "base",
-                "upstream_version": "1.0.0",
-                "cvc_revision": 1,
-                "description": "Base library",
-                "homepage": "https://example.com",
-                "license": "MIT",
-            },
-            "source": {
-                "type": "tarball",
-                "url": "https://example.com/base-1.0.0.tar.gz",
-                "sha256": "0" * 64,
-            },
-            "build": {"matrix": [{"platform": "linux", "script": "build.sh"}]},
-        }))
+        (base_dir / "recipe.yaml").write_text(
+            yaml.dump(
+                {
+                    "schema_version": 1,
+                    "recipe": {
+                        "name": "base",
+                        "upstream_version": "1.0.0",
+                        "cvc_revision": 1,
+                        "description": "Base library",
+                        "homepage": "https://example.com",
+                        "license": "MIT",
+                    },
+                    "source": {
+                        "type": "tarball",
+                        "url": "https://example.com/base-1.0.0.tar.gz",
+                        "sha256": "0" * 64,
+                    },
+                    "build": {"matrix": [{"platform": "linux", "script": "build.sh"}]},
+                }
+            )
+        )
         (base_dir / "build.sh").write_text("#!/bin/sh\necho base\n")
 
         # Create 'app' recipe that depends on 'base'
         app_dir = tmp_path / "app"
         app_dir.mkdir()
-        (app_dir / "recipe.yaml").write_text(yaml.dump({
-            "schema_version": 1,
-            "recipe": {
-                "name": "app",
-                "upstream_version": "2.0.0",
-                "cvc_revision": 1,
-                "description": "App depending on base",
-                "homepage": "https://example.com",
-                "license": "MIT",
-            },
-            "source": {
-                "type": "tarball",
-                "url": "https://example.com/app-2.0.0.tar.gz",
-                "sha256": "0" * 64,
-            },
-            "depends": {"build": ["base"]},
-            "build": {"matrix": [{"platform": "linux", "script": "build.sh"}]},
-        }))
+        (app_dir / "recipe.yaml").write_text(
+            yaml.dump(
+                {
+                    "schema_version": 1,
+                    "recipe": {
+                        "name": "app",
+                        "upstream_version": "2.0.0",
+                        "cvc_revision": 1,
+                        "description": "App depending on base",
+                        "homepage": "https://example.com",
+                        "license": "MIT",
+                    },
+                    "source": {
+                        "type": "tarball",
+                        "url": "https://example.com/app-2.0.0.tar.gz",
+                        "sha256": "0" * 64,
+                    },
+                    "depends": {"build": ["base"]},
+                    "build": {"matrix": [{"platform": "linux", "script": "build.sh"}]},
+                }
+            )
+        )
         (app_dir / "build.sh").write_text("#!/bin/sh\necho app\n")
 
         recipes = [Recipe.load(base_dir), Recipe.load(app_dir)]
@@ -296,23 +308,27 @@ class TestDummyRecipeBuild:
         # Create a minimal recipe
         recipe_dir = tmp_path / "recipes" / "hello"
         recipe_dir.mkdir(parents=True)
-        (recipe_dir / "recipe.yaml").write_text(yaml.dump({
-            "schema_version": 1,
-            "recipe": {
-                "name": "hello",
-                "upstream_version": "1.0.0",
-                "cvc_revision": 1,
-                "description": "Dummy",
-                "homepage": "https://example.com",
-                "license": "MIT",
-            },
-            "source": {
-                "type": "tarball",
-                "url": "https://example.com/hello-1.0.0.tar.gz",
-                "sha256": "0" * 64,
-            },
-            "build": {"matrix": [{"platform": "linux", "script": "build.sh"}]},
-        }))
+        (recipe_dir / "recipe.yaml").write_text(
+            yaml.dump(
+                {
+                    "schema_version": 1,
+                    "recipe": {
+                        "name": "hello",
+                        "upstream_version": "1.0.0",
+                        "cvc_revision": 1,
+                        "description": "Dummy",
+                        "homepage": "https://example.com",
+                        "license": "MIT",
+                    },
+                    "source": {
+                        "type": "tarball",
+                        "url": "https://example.com/hello-1.0.0.tar.gz",
+                        "sha256": "0" * 64,
+                    },
+                    "build": {"matrix": [{"platform": "linux", "script": "build.sh"}]},
+                }
+            )
+        )
         (recipe_dir / "build.sh").write_text("#!/bin/sh\necho hello\n")
 
         recipe = Recipe.load(recipe_dir)
@@ -326,17 +342,21 @@ class TestDummyRecipeBuild:
 
         from cvcpkg.builder import create_archive, generate_manifest, stage_bundle
 
-        manifest = generate_manifest(
-            recipe, install_dir, "linux", "x86_64", "release", "shared"
-        )
+        manifest = generate_manifest(recipe, install_dir, "linux", "x86_64", "release", "shared")
         staging = tmp_path / "staging"
         staging.mkdir()
         stage_bundle(install_dir, manifest, staging)
 
         dist = tmp_path / "dist"
         archive_path, sha, size = create_archive(
-            staging, dist, "hello", "1.0.0+cvc.1",
-            "linux", "x86_64", "release", "shared",
+            staging,
+            dist,
+            "hello",
+            "1.0.0+cvc.1",
+            "linux",
+            "x86_64",
+            "release",
+            "shared",
         )
         assert archive_path.exists()
 
@@ -399,15 +419,18 @@ class TestCMakeIntegration:
         prefix = tmp_path / "prefix"
 
         result = subprocess.run(
-            [cmake, "-B", str(build_dir), "-S", str(REPO_ROOT),
-             f"-DCMAKE_INSTALL_PREFIX={prefix}"],
-            capture_output=True, text=True, timeout=30,
+            [cmake, "-B", str(build_dir), "-S", str(REPO_ROOT), f"-DCMAKE_INSTALL_PREFIX={prefix}"],
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
         assert result.returncode == 0, f"cmake configure failed:\n{result.stderr}"
 
         result = subprocess.run(
             [cmake, "--install", str(build_dir)],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
         assert result.returncode == 0, f"cmake install failed:\n{result.stderr}"
 
@@ -427,13 +450,18 @@ class TestCMakeIntegration:
         prefix = tmp_path / "prefix"
         build_dir = tmp_path / "build-cvcpkg"
         subprocess.run(
-            [cmake, "-B", str(build_dir), "-S", str(REPO_ROOT),
-             f"-DCMAKE_INSTALL_PREFIX={prefix}"],
-            capture_output=True, text=True, timeout=30, check=True,
+            [cmake, "-B", str(build_dir), "-S", str(REPO_ROOT), f"-DCMAKE_INSTALL_PREFIX={prefix}"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=True,
         )
         subprocess.run(
             [cmake, "--install", str(build_dir)],
-            capture_output=True, text=True, timeout=30, check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=True,
         )
 
         # Create a tiny downstream CMakeLists.txt
@@ -443,22 +471,28 @@ class TestCMakeIntegration:
             "cmake_minimum_required(VERSION 3.21)\n"
             "project(test_consumer LANGUAGES NONE)\n"
             "find_package(cvcpkg CONFIG REQUIRED)\n"
-            "message(STATUS \"cvcpkg version: ${CVCPKG_VERSION}\")\n"
-            "message(STATUS \"cvcpkg root: ${CVCPKG_ROOT_DIR}\")\n"
+            'message(STATUS "cvcpkg version: ${CVCPKG_VERSION}")\n'
+            'message(STATUS "cvcpkg root: ${CVCPKG_ROOT_DIR}")\n'
             "# Backward compat alias\n"
             "find_package(libcvc-deps CONFIG REQUIRED)\n"
-            "message(STATUS \"libcvc-deps version: ${LIBCVC_DEPS_VERSION}\")\n"
+            'message(STATUS "libcvc-deps version: ${LIBCVC_DEPS_VERSION}")\n'
         )
 
         build_downstream = tmp_path / "build-downstream"
         result = subprocess.run(
-            [cmake, "-B", str(build_downstream), "-S", str(downstream),
-             f"-DCMAKE_PREFIX_PATH={prefix}"],
-            capture_output=True, text=True, timeout=30,
+            [
+                cmake,
+                "-B",
+                str(build_downstream),
+                "-S",
+                str(downstream),
+                f"-DCMAKE_PREFIX_PATH={prefix}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
-        assert result.returncode == 0, (
-            f"downstream cmake configure failed:\n{result.stderr}"
-        )
+        assert result.returncode == 0, f"downstream cmake configure failed:\n{result.stderr}"
         assert "cvcpkg version: 2.0.0" in result.stdout
         assert "cvcpkg root:" in result.stdout
         assert "libcvc-deps version: 2.0.0" in result.stdout
