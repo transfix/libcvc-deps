@@ -14,8 +14,9 @@ recipe:
     python313.  Built with --disable-gil; the interpreter is named
     python3.13t and the shared library libpython3.13t.  Suitable for
     experiments with true multi-core parallelism in Python.
-    Only supported on Linux, macOS, and BSD platforms; Windows and
-    cross-compilation targets are not included in this recipe.
+    Supported on Linux, macOS, and BSD platforms (shared library);
+    experimental static builds for wasm (Emscripten) and cosmo (APE);
+    wasi is blocked pending WASI threads stabilisation.
 
 source:
   type: tarball
@@ -84,6 +85,18 @@ build:
       script: build.sh
       env:
         CFLAGS: "-O2 -fPIC"
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
+    - platform: wasm
+      host_platform: macos
+      script: build-wasm.sh
+    - platform: wasi
+      host_platform: linux
+      script: build-wasi.sh
+    - platform: cosmo
+      host_platform: linux
+      script: build-cosmo.sh
 
 package:
   files:
@@ -117,12 +130,36 @@ notes:
       lib/python3.13/lib-dynload/ directory.  Installing python313 and
       python313t into the same prefix is safe as long as both are built
       from the same source release.
-  - title: "Windows and cross-compile targets not supported"
-    platforms: [linux, macos, freebsd, openbsd, netbsd]
+  - title: "Windows not supported"
+    platforms: [linux, macos, freebsd, openbsd, netbsd, wasm, wasi, cosmo]
     description: >-
-      The free-threaded build is not included for Windows (PCbuild) or
-      cross-compilation targets (wasm/wasi/cosmo).  Use python313 for
-      those platforms.
+      Windows (PCbuild) is not included.  The free-threaded build requires
+      a Unix-style configure toolchain.  Use python313 for Windows.
+  - title: "WASM (Emscripten) — experimental"
+    platforms: [wasm]
+    description: >-
+      Builds with -matomics -mbulk-memory -pthread to enable Emscripten's
+      SharedArrayBuffer-backed pthreads.  The resulting .wasm must be served
+      with COOP + COEP HTTP headers for SharedArrayBuffer to be available.
+      Multi-threaded behaviour under the Web Worker thread model is
+      experimental and may be non-deterministic under heavy concurrency.
+  - title: "WASI — expected to fail (no pthreads)"
+    platforms: [wasi]
+    description: >-
+      Standard wasm32-wasip1 (wasi-sdk ≤ 22) has no pthread support.
+      CPython configure will abort with "--disable-gil requires threading
+      support".  This matrix entry is kept to track upstream progress; it
+      will be enabled once the WASI threads proposal stabilises in wasi-sdk
+      and CPython's build system gains wasip2 support.
+  - title: "Cosmo (APE) — experimental"
+    platforms: [cosmo]
+    description: >-
+      Cosmopolitan libc ships pthreads, so --disable-gil configures and
+      builds.  The APE binary runs on Linux, macOS, Windows, and the BSDs.
+      The free-threaded runtime has been validated only on Linux/macOS;
+      behaviour on the broader Cosmo compatibility matrix (Windows TLS,
+      OpenBSD pledge, etc.) is unknown.  C extension modules are unavailable
+      (statically linked stdlib only).
 
 conflicts:
   - python313

@@ -5406,3 +5406,175 @@ class TestInstallConflictGating:
             )
         # Should succeed (or at least not fail on conflicts)
         assert ret == 0
+
+
+class TestConflictErrorMessages:
+    """Verify exact content of conflict error messages."""
+
+    def _fn(self):
+        from cvcpkg.cli._install import _check_conflicts
+
+        return _check_conflicts
+
+    def test_co_install_message_says_cannot_install_both(self, tmp_path):
+        import click
+
+        rd = _make_recipes_dir(tmp_path)
+        with pytest.raises(click.ClickException) as exc_info:
+            self._fn()(["python313", "python313t"], tmp_path, [rd])
+        msg = exc_info.value.format_message()
+        assert "cannot install both" in msg.lower()
+
+    def test_co_install_message_says_remove_from_request(self, tmp_path):
+        import click
+
+        rd = _make_recipes_dir(tmp_path)
+        with pytest.raises(click.ClickException) as exc_info:
+            self._fn()(["python313", "python313t"], tmp_path, [rd])
+        msg = exc_info.value.format_message()
+        assert "remove" in msg.lower() or "retry" in msg.lower()
+
+    def test_installed_conflict_message_says_uninstall(self, tmp_path):
+        import click
+
+        rd = _make_recipes_dir(tmp_path)
+        prefix = tmp_path / "prefix"
+        _write_lockfile(prefix, ["python313"])
+        with pytest.raises(click.ClickException) as exc_info:
+            self._fn()(["python313t"], prefix, [rd])
+        msg = exc_info.value.format_message()
+        assert "uninstall" in msg.lower()
+
+    def test_installed_conflict_message_says_then_retry(self, tmp_path):
+        import click
+
+        rd = _make_recipes_dir(tmp_path)
+        prefix = tmp_path / "prefix"
+        _write_lockfile(prefix, ["python313"])
+        with pytest.raises(click.ClickException) as exc_info:
+            self._fn()(["python313t"], prefix, [rd])
+        msg = exc_info.value.format_message()
+        assert "retry" in msg.lower()
+
+    def test_installed_conflict_message_includes_cvcpkg_uninstall_command(self, tmp_path):
+        import click
+
+        rd = _make_recipes_dir(tmp_path)
+        prefix = tmp_path / "prefix"
+        _write_lockfile(prefix, ["python313"])
+        with pytest.raises(click.ClickException) as exc_info:
+            self._fn()(["python313t"], prefix, [rd])
+        msg = exc_info.value.format_message()
+        # The message should contain an actionable CLI command the user can copy
+        assert "cvcpkg uninstall python313" in msg
+
+
+class TestAsymmetricConflicts:
+    """Conflict checks are only enforced when the *installing* package declares
+    the conflict — not the already-installed one.  This is by design: the
+    conflict list is the installed package's way of saying "I can't share a
+    prefix with X".  Both sides should declare the conflict for full safety."""
+
+    def _fn(self):
+        from cvcpkg.cli._install import _check_conflicts
+
+        return _check_conflicts
+
+    def _make_one_sided_recipes(self, tmp_path: Path) -> Path:
+        """python313t declares conflict, python313 does NOT."""
+        import yaml as _yaml
+
+        rd = tmp_path / "recipes"
+        for name, confs in [("python313", []), ("python313t", ["python313"])]:
+            pkg_dir = rd / name
+            pkg_dir.mkdir(parents=True, exist_ok=True)
+            d = {
+                "schema_version": 1,
+                "recipe": {
+                    "name": name,
+                    "upstream_version": "3.13.3",
+                    "cvc_revision": 1,
+                },
+                "source": {"type": "vendored", "path": f"third-party/{name}"},
+                "patches": [],
+                "build": {
+                    "matrix": [{"platform": "linux", "script": "build.sh"}],
+                },
+                "package": {
+                    "files": ["lib/*", "include/*"],
+                    "cmake_packages": [],
+                },
+            }
+            if confs:
+                d["conflicts"] = confs
+            (pkg_dir / "recipe.yaml").write_text(_yaml.dump(d, default_flow_style=False))
+        return rd
+
+    def test_co_install_caught_from_declaring_side(self, tmp_path):
+        """python313t declares conflict → caught when both are co-installed."""
+        import click
+
+        rd = self._make_one_sided_recipes(tmp_path)
+        with pytest.raises(click.ClickException) as exc_info:
+            self._fn()(["python313", "python313t"], tmp_path, [rd])
+        assert "python313" in exc_info.value.format_message()
+
+    def test_installing_non_declaring_package_not_caught(self, tmp_path):
+        """python313 does NOT declare conflicts, so installing it over python313t
+        is not blocked.  This is expected behaviour — both sides should declare
+        the conflict for full safety."""
+        rd = self._make_one_sided_recipes(tmp_path)
+        prefix = tmp_path / "prefix"
+        _write_lockfile(prefix, ["python313t"])
+        # python313 has no conflicts → no ClickException
+        self._fn()(["python313"], prefix, [rd])  # must not raise
+
+    def test_installing_declaring_package_is_still_caught(self, tmp_path):
+        """python313t declares conflict → caught when installed over python313."""
+        import click
+
+        rd = self._make_one_sided_recipes(tmp_path)
+        prefix = tmp_path / "prefix"
+        _write_lockfile(prefix, ["python313"])
+        with pytest.raises(click.ClickException):
+            self._fn()(["python313t"], prefix, [rd])
+
+
+class TestInstallConflictWithRequirementsFile:
+    """Conflict check fires when packages come from a requirements file."""
+
+    def test_conflict_via_from_requirements_file(self, tmp_path, capsys):
+        cat = _make_conflict_catalog(tmp_path)
+        rd = _make_recipes_dir(tmp_path)
+        prefix = tmp_path / "prefix"
+        req_file = tmp_path / "requirements.yaml"
+        import yaml as _yaml
+
+        req_file.write_text(
+            _yaml.dump(
+                {
+                    "platform": "linux",
+                    "arch": "x86_64",
+                    "config": "release",
+                    "link": "shared",
+                    "components": ["python313", "python313t"],
+                }
+            )
+        )
+        ret = main(
+            [
+                "install",
+                "--from",
+                str(req_file),
+                "--catalog",
+                str(cat),
+                "--prefix",
+                str(prefix),
+                "--recipes-dir",
+                str(rd),
+            ]
+        )
+        assert ret != 0
+        err = capsys.readouterr().err
+        assert "python313" in err
+        assert "python313t" in err

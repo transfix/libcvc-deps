@@ -191,6 +191,26 @@ class TestRecipeLoad:
         r = Recipe.load(recipe_dir)
         assert len(r.build_matrix) == 3
 
+    def test_load_conflicts_field(self, tmp_path):
+        recipe_dict = {**MINIMAL_RECIPE, "conflicts": ["pkg-a", "pkg-b"]}
+        recipe_dir = tmp_path / "recipes" / "testpkg"
+        _write_recipe(recipe_dir, recipe_dict)
+        r = Recipe.load(recipe_dir)
+        assert r.conflicts == ["pkg-a", "pkg-b"]
+
+    def test_load_conflicts_defaults_to_empty_list(self, tmp_path):
+        recipe_dir = tmp_path / "recipes" / "testpkg"
+        _write_recipe(recipe_dir, MINIMAL_RECIPE)
+        r = Recipe.load(recipe_dir)
+        assert r.conflicts == []
+
+    def test_load_conflicts_null_treated_as_empty(self, tmp_path):
+        recipe_dict = {**MINIMAL_RECIPE, "conflicts": None}
+        recipe_dir = tmp_path / "recipes" / "testpkg"
+        _write_recipe(recipe_dir, recipe_dict)
+        r = Recipe.load(recipe_dir)
+        assert r.conflicts == []
+
 
 # ── Matrix selection ────────────────────────────────────────────
 
