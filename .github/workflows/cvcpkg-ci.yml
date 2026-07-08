@@ -48,9 +48,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install poetry
           poetry install --with dev --extras server
-          # greenlet is required by SQLAlchemy async; the lockfile marker
-          # omits arm64 (macOS Apple Silicon) so install unconditionally.
-          poetry run pip install "greenlet>=3.0"
 
       - name: Run unit tests
         working-directory: .
@@ -116,7 +113,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install poetry
           poetry install --with dev --extras server
-          poetry run pip install "greenlet>=3.0"
 
       - name: Ruff check
         working-directory: .
