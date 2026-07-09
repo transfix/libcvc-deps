@@ -53,6 +53,21 @@ build:
         CXXFLAGS: "-O2 -fPIC"
     - platform: windows
       script: build.ps1
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
+    - platform: wasm
+      host_platform: windows
+      script: build-wasm.ps1
+    - platform: wasi
+      host_platform: linux
+      script: build-wasi.sh
+    - platform: wasi
+      host_platform: windows
+      script: build-wasi.ps1
+    - platform: cosmo
+      host_platform: linux
+      script: build-cosmo.sh
 
 package:
   files:
