@@ -27,11 +27,11 @@ patches: []
 depends:
   build:
     - ninja
-  runtime: []
-  host_tools:
     - meson
     - pkg-config
-    - python3
+    - python312
+  runtime: []
+  host_tools: []
 
 build:
   matrix:

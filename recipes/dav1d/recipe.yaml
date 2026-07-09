@@ -28,10 +28,10 @@ depends:
     - name: nasm
       platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
     - ninja
-  runtime: []
-  host_tools:
     - meson
     - pkg-config
+  runtime: []
+  host_tools: []
 
 build:
   matrix:

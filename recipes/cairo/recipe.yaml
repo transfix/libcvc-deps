@@ -25,6 +25,8 @@ patches: []
 depends:
   build:
     - ninja
+    - meson
+    - pkg-config
   runtime:
     - name: pixman
       version: "^0.44"
@@ -36,9 +38,7 @@ depends:
       version: "^2.80"
     - name: libpng
       version: "^1.6"
-  host_tools:
-    - meson
-    - pkg-config
+  host_tools: []
 
 build:
   matrix:

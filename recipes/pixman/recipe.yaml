@@ -25,10 +25,10 @@ patches: []
 depends:
   build:
     - ninja
-  runtime: []
-  host_tools:
     - meson
     - pkg-config
+  runtime: []
+  host_tools: []
 
 build:
   matrix:

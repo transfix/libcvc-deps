@@ -24,6 +24,9 @@ patches: []
 depends:
   build:
     - ninja
+    - meson
+    - pkg-config
+    - python312
   runtime:
     - name: glib
       version: "^2.80"
@@ -33,10 +36,7 @@ depends:
       version: "^1.6"
     - name: tiff
       version: "^4.6"
-  host_tools:
-    - meson
-    - pkg-config
-    - python3
+  host_tools: []
 
 build:
   matrix:

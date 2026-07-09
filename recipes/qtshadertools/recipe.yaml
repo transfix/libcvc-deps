@@ -23,11 +23,11 @@ depends:
   build:
     - cmake
     - ninja
+    - python312
   runtime:
     - {name: qt6, version: ">=6.8"}
   host_tools:
     - perl
-    - python3
 
 build:
   matrix:

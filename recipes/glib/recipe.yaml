@@ -26,6 +26,9 @@ patches: []
 depends:
   build:
     - ninja
+    - meson
+    - pkg-config
+    - python312
   runtime:
     - name: libffi
       version: "^3.4"
@@ -33,10 +36,7 @@ depends:
       version: "^10.0"
     - name: zlib
       version: "^1.3"
-  host_tools:
-    - meson
-    - pkg-config
-    - python3
+  host_tools: []
 
 build:
   matrix:

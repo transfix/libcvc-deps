@@ -24,14 +24,14 @@ patches: []
 depends:
   build:
     - ninja
+    - meson
+    - pkg-config
   runtime:
     - name: glib
       version: "^2.80"
     - name: freetype
       version: "^2.13"
-  host_tools:
-    - meson
-    - pkg-config
+  host_tools: []
 
 build:
   matrix:

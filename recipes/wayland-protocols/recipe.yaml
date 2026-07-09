@@ -25,12 +25,12 @@ patches: []
 depends:
   build:
     - ninja
+    - meson
+    - pkg-config
   runtime:
     - name: wayland
       version: "^1.23"
-  host_tools:
-    - meson
-    - pkg-config
+  host_tools: []
 
 build:
   matrix:

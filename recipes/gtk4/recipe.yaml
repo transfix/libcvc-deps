@@ -28,6 +28,8 @@ patches: []
 depends:
   build:
     - ninja
+    - meson
+    - pkg-config
   runtime:
     - name: glib
       version: "^2.80"
@@ -54,9 +56,7 @@ depends:
     - name: xkbcommon
       version: "^1.7"
       platforms: [linux, freebsd]
-  host_tools:
-    - meson
-    - pkg-config
+  host_tools: []
 
 build:
   matrix:

@@ -69,6 +69,7 @@ depends:
       platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
     - name: libpulse
       platforms: [linux]
+    - pkg-config
   runtime:
     - name: x264
       platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
@@ -108,8 +109,7 @@ depends:
       platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
     - name: libpulse
       platforms: [linux]
-  host_tools:
-    - pkg-config
+  host_tools: []
 
 build:
   matrix:

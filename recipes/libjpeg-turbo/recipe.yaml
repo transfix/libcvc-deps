@@ -23,8 +23,8 @@ depends:
   build:
     - cmake
     - ninja
-  host_tools:
     - nasm
+  host_tools: []
 
 build:
   matrix:

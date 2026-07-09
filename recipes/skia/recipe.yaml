@@ -27,9 +27,9 @@ patches: []
 depends:
   build:
     - ninja
+    - python312
   runtime: []
   host_tools:
-    - python3
     - emsdk
 
 build:

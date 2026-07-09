@@ -26,11 +26,11 @@ depends:
   build:
     - name: dav1d
     - ninja
-  runtime:
-    - name: dav1d
-  host_tools:
     - meson
     - pkg-config
+  runtime:
+    - name: dav1d
+  host_tools: []
 
 build:
   matrix:

@@ -29,10 +29,10 @@ depends:
       platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
     - cmake
     - ninja
+    - pkg-config
   runtime:
     - name: x265
-  host_tools:
-    - pkg-config
+  host_tools: []
 
 build:
   matrix:

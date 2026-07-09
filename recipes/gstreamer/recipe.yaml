@@ -30,15 +30,15 @@ depends:
     - name: nasm
       platforms: [linux, freebsd, openbsd, netbsd]
     - ninja
+    - meson
+    - pkg-config
+    - bison
+    - flex
+    - python312
   runtime:
     - name: glib
       version: "^2.80"
-  host_tools:
-    - meson
-    - pkg-config
-    - python3
-    - bison
-    - flex
+  host_tools: []
 
 build:
   matrix:

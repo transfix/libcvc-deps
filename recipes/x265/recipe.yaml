@@ -29,9 +29,9 @@ depends:
       platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
     - cmake
     - ninja
-  runtime: []
-  host_tools:
     - pkg-config
+  runtime: []
+  host_tools: []
 
 build:
   matrix:

@@ -24,15 +24,15 @@ patches: []
 depends:
   build:
     - ninja
+    - meson
+    - pkg-config
+    - python312
   runtime:
     - name: freetype
       version: "^2.13"
     - name: expat
       version: "^2.6"
-  host_tools:
-    - meson
-    - pkg-config
-    - python3
+  host_tools: []
 
 build:
   matrix:
