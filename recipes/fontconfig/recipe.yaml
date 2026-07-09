@@ -22,7 +22,8 @@ source:
 patches: []
 
 depends:
-  build: []
+  build:
+    - ninja
   runtime:
     - name: freetype
       version: "^2.13"
@@ -30,7 +31,6 @@ depends:
       version: "^2.6"
   host_tools:
     - meson
-    - ninja
     - pkg-config
     - python3
 

@@ -23,11 +23,11 @@ source:
 patches: []
 
 depends:
-  build: []
+  build:
+    - ninja
   runtime: []
   host_tools:
     - meson
-    - ninja
     - pkg-config
 
 build:

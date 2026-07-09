@@ -23,7 +23,8 @@ source:
 patches: []
 
 depends:
-  build: []
+  build:
+    - ninja
   runtime:
     - name: pixman
       version: "^0.44"
@@ -37,7 +38,6 @@ depends:
       version: "^1.6"
   host_tools:
     - meson
-    - ninja
     - pkg-config
 
 build:

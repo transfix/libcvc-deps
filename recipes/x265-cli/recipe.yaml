@@ -27,11 +27,11 @@ depends:
     - name: x265
     - name: nasm
       platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - cmake
+    - ninja
   runtime:
     - name: x265
   host_tools:
-    - cmake
-    - ninja
     - pkg-config
 
 build:

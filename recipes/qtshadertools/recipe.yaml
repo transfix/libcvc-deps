@@ -20,12 +20,12 @@ source:
 patches: []
 
 depends:
-  build: []
+  build:
+    - cmake
+    - ninja
   runtime:
     - {name: qt6, version: ">=6.8"}
   host_tools:
-    - cmake
-    - ninja
     - perl
     - python3
 

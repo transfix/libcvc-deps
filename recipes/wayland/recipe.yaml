@@ -23,7 +23,8 @@ source:
 patches: []
 
 depends:
-  build: []
+  build:
+    - ninja
   runtime:
     - name: libffi
       version: "^3.4"
@@ -31,7 +32,6 @@ depends:
       version: "^2.6"
   host_tools:
     - meson
-    - ninja
     - pkg-config
 
 build:

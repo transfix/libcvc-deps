@@ -25,11 +25,11 @@ source:
 patches: []
 
 depends:
-  build: []
+  build:
+    - ninja
   runtime: []
   host_tools:
     - python3
-    - ninja
     - emsdk
 
 build:

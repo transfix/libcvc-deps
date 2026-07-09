@@ -25,11 +25,11 @@ patches: []
 depends:
   build:
     - name: dav1d
+    - ninja
   runtime:
     - name: dav1d
   host_tools:
     - meson
-    - ninja
     - pkg-config
 
 build:

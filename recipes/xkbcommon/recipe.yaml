@@ -23,7 +23,8 @@ source:
 patches: []
 
 depends:
-  build: []
+  build:
+    - ninja
   runtime:
     - name: wayland
       version: "^1.23"
@@ -33,7 +34,6 @@ depends:
       platforms: [linux, freebsd]
   host_tools:
     - meson
-    - ninja
     - pkg-config
 
 build:

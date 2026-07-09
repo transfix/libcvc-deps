@@ -26,7 +26,8 @@ source:
 patches: []
 
 depends:
-  build: []
+  build:
+    - ninja
   runtime:
     - name: glib
       version: "^2.80"
@@ -55,7 +56,6 @@ depends:
       platforms: [linux, freebsd]
   host_tools:
     - meson
-    - ninja
     - pkg-config
 
 build:

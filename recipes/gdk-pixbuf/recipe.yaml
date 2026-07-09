@@ -22,7 +22,8 @@ source:
 patches: []
 
 depends:
-  build: []
+  build:
+    - ninja
   runtime:
     - name: glib
       version: "^2.80"
@@ -34,7 +35,6 @@ depends:
       version: "^4.6"
   host_tools:
     - meson
-    - ninja
     - pkg-config
     - python3
 

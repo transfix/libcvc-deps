@@ -24,7 +24,8 @@ source:
 patches: []
 
 depends:
-  build: []
+  build:
+    - ninja
   runtime:
     - name: libffi
       version: "^3.4"
@@ -34,7 +35,6 @@ depends:
       version: "^1.3"
   host_tools:
     - meson
-    - ninja
     - pkg-config
     - python3
 
