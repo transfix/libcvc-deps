@@ -108,11 +108,7 @@ build:
 package:
   files:
     - bin/python3.13*
-    - bin/python3
-    - bin/python
     - bin/pip3.13*
-    - bin/pip3
-    - bin/pip
     - bin/idle3.13*
     - bin/pydoc3.13*
     - lib/libpython3.13*

@@ -23,7 +23,10 @@ depends:
   build:
     - cmake
     - ninja
-    - python312
+    - name: python3
+      platforms: [linux, macos, freebsd, openbsd, netbsd]
+    - name: python312
+      platforms: [windows]
   runtime:
     - {name: qt6, version: ">=6.8"}
     - {name: qtshadertools, version: ">=6.8"}

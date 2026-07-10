@@ -26,7 +26,10 @@ depends:
     - ninja
     - meson
     - pkg-config
-    - python312
+    - name: python3
+      platforms: [linux, macos, freebsd, openbsd, netbsd]
+    - name: python312
+      platforms: [windows]
   runtime:
     - name: glib
       version: "^2.80"
