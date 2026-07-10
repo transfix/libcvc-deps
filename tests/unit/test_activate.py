@@ -223,7 +223,7 @@ class TestPythonAliasReconcile:
         (bin_dir / "python3").symlink_to("python3.11")  # meta/user pinned 3.11
         act.write_activate_scripts(tmp_path, platform="linux")
         assert (bin_dir / "python3").resolve() == (bin_dir / "python3.11")  # not clobbered
-        assert (bin_dir / "python").resolve() == (bin_dir / "python3.13")   # bare created -> highest
+        assert (bin_dir / "python").resolve() == (bin_dir / "python3.13")  # bare created -> highest
 
     def test_ignores_free_threaded_for_generic(self, tmp_path):
         bin_dir = tmp_path / "bin"

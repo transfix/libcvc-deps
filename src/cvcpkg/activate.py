@@ -601,11 +601,11 @@ def _ensure_python_aliases(bin_dir: Path) -> list[Path]:
     if not bin_dir.is_dir():
         return []
 
-    ver_re = re.compile(r"^python(\d+)\.(\d+)$")         # python3.13
+    ver_re = re.compile(r"^python(\d+)\.(\d+)$")  # python3.13
     cfg_re = re.compile(r"^python(\d+)\.(\d+)-config$")  # python3.13-config
-    pip_re = re.compile(r"^pip(\d+)\.(\d+)$")            # pip3.13
+    pip_re = re.compile(r"^pip(\d+)\.(\d+)$")  # pip3.13
 
-    def _highest(rx: "re.Pattern[str]") -> str | None:
+    def _highest(rx: re.Pattern[str]) -> str | None:
         best_name, best_key = None, None
         for entry in bin_dir.iterdir():
             m = rx.match(entry.name)
