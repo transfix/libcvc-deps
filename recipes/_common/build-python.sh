@@ -122,11 +122,21 @@ $MAKE install
 # the installed binary so it uses $ORIGIN-relative paths instead.
 if [ "$IS_CROSS" = false ]; then
     PY_BIN="${CVC_INSTALL_DIR}/bin/python${PYTHON_LDVERSION}"
-    if command -v patchelf >/dev/null 2>&1 && [[ "${CVC_PLATFORM}" != "macos" ]]; then
-        patchelf --set-rpath "\$ORIGIN/../lib" "${PY_BIN}" 2>/dev/null || true
-        # Patch extension modules so they find libpython.
+    if [[ "${CVC_PLATFORM}" != "macos" ]]; then
+        # ELF (Linux/BSD): overwrite the rpath with an $ORIGIN-relative path so
+        # the install is relocatable. CPython's Makefile otherwise bakes a
+        # make-MANGLED rpath — the $O in $ORIGIN is a make variable, so it
+        # expands to a broken "RIGIN/../lib" (RUNPATH). patchelf writes literal
+        # bytes and sidesteps make/shell $ORIGIN escaping entirely, so it is a
+        # REQUIRED build dependency here (declared per-recipe for linux/*bsd).
+        if ! command -v patchelf >/dev/null 2>&1; then
+            echo "build-python.sh: patchelf required on ${CVC_PLATFORM} but not found on PATH" >&2
+            exit 1
+        fi
+        patchelf --set-rpath '$ORIGIN/../lib' "${PY_BIN}"
+        # Extension modules (lib/pythonX.Y/**): point them back at the prefix.
         find "${CVC_INSTALL_DIR}/lib/python${PYTHON_MINOR}" -name '*.so' -print0 \
-            | xargs -0 -I{} patchelf --set-rpath "\$ORIGIN/../../.." {} 2>/dev/null || true
+            | xargs -0 -r -I{} patchelf --set-rpath '$ORIGIN/../../..' {} 2>/dev/null || true
     fi
 
     if [[ "${CVC_PLATFORM}" == "macos" ]]; then
