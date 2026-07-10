@@ -29,6 +29,8 @@ patches: []
 
 depends:
   build:
+    - name: patchelf
+      platforms: [linux, freebsd, openbsd, netbsd]
     - name: nasm
       platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
     - name: x264
