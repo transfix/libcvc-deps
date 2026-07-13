@@ -140,11 +140,24 @@ systemctl enable --now cvcpkg-builder
   --daemon
 ```
 
-### Windows (schtasks) — sandipaws
+### Windows (schtasks + supervisor)
 
-```powershell
-schtasks /create /tn "cvcpkg-builder" /tr "cvcpkg builder run --server https://cvcpkg.org --token <TOKEN> --name sandipaws --max-jobs 2 --work-dir C:\temp\cvcpkg-builder" /sc onstart /ru tfx /rl highest
-```
+Windows builders run a scheduled task (`cvcpkg-builder`, `/sc onstart`) that
+launches a **supervisor wrapper** rather than `cvcpkg builder run` directly.
+The supervisor loops: update cvcpkg from the local checkout, run the builder
+with `CVCPKG_BUILDER_SUPERVISED=1`, and relaunch on exit. Because
+`--daemon` is rejected on Windows, this is how the builder is backgrounded,
+kept a singleton, and self-updated without a manual restart.
+
+When `CVCPKG_BUILDER_SUPERVISED` is set, a server-pushed `builder.update`
+makes the builder exit with sentinel code `90`
+(`_SUPERVISOR_RESTART_CODE`) instead of trying to re-exec in place (Windows
+`os.execv` cannot replace the process there); the supervisor then pulls the
+latest cvcpkg and relaunches on fresh code.
+
+The wrapper script and per-host setup for `sandipaws`, `phm-win11`, and
+`stablefarm-win11` live in the **vm-provisioning** repo
+(`windows/cvcpkg-builder-supervisor.cmd`, `windows/WINDOWS-SETUP.md`).
 
 ## API Tokens
 
@@ -283,8 +296,10 @@ ssh <host> "cd ~/libcvc-deps && git fetch origin && git checkout origin/master &
   pip install --break-system-packages --quiet ."
 ```
 
-No builder restart is needed — the running daemon will use the new code
-for the next job it claims.
+The new code takes effect when the builder next (re)starts, not mid-run —
+a long-lived process keeps the modules it imported at startup. Linux/BSD
+builders restart via their service manager; Windows builders under the
+supervisor wrapper restart automatically (see the supervisor note above).
 
 ## Network Topology
 
