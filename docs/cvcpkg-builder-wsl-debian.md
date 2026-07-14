@@ -326,8 +326,9 @@ Wants=network-online.target
 Type=simple
 User=tfx
 Environment=PATH=/home/tfx/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=CVCPKG_SERVER_URL=https://cvcpkg.org
 ExecStart=/home/tfx/.local/bin/cvcpkg builder run \
-    --server https://cvcpkg.org \
+    --server ${CVCPKG_SERVER_URL} \
     --token cvctok_<builder-token> \
     --name cvcpkg-wsl-01 \
     --max-jobs 4 \
