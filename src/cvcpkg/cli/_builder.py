@@ -158,6 +158,22 @@ def builder_status(builder_id: int, server: str, token: str):
     help="Disable WebSocket and use HTTP long-poll only.",
 )
 @click.option(
+    "--exit-when-empty",
+    is_flag=True,
+    default=False,
+    help="Drain mode: exit 0 once the queue has no claimable job and none are "
+    "in flight.  For ephemeral/CI runners.  Forces HTTP long-poll (the "
+    "WebSocket path has no empty-queue signal).",
+)
+@click.option(
+    "--max-runtime",
+    type=float,
+    default=None,
+    help="Wall-clock budget in seconds.  Stop claiming new jobs once exceeded, "
+    "let in-flight jobs finish, then exit 0.  For time-boxed CI runners that "
+    "must stay under a hard job timeout.",
+)
+@click.option(
     "--daemon",
     is_flag=True,
     help="Run as a background daemon (fork and detach).",
@@ -193,6 +209,8 @@ def builder_run(
     work_dir: str | None,
     recipe_cache_dir: str | None,
     no_websocket: bool,
+    exit_when_empty: bool,
+    max_runtime: float | None,
     daemon: bool,
     pidfile: str,
     cross_platforms: tuple[str, ...],
@@ -1233,6 +1251,15 @@ def builder_run(
                 click.echo("WebSocket connected.")
                 ws.settimeout(5)  # non-blocking reads with 5s timeout
                 while not shutdown:
+                    # Wall-clock budget: stop claiming, drain in-flight, exit.
+                    if _past_deadline():
+                        click.echo(
+                            f"Max runtime reached ({max_runtime:.0f}s) - "
+                            "stopping claims, finishing in-flight jobs..."
+                        )
+                        shutdown = True
+                        break
+
                     # Send heartbeat if due
                     now = time.time()
                     if now - last_heartbeat >= heartbeat_interval:
@@ -1321,9 +1348,18 @@ def builder_run(
     heartbeat_interval = 60.0
     poll_interval = 5.0  # seconds between next-job polls
 
+    # Time-boxed / drain-mode controls for ephemeral (CI) runners.
+    run_deadline = (time.time() + max_runtime) if max_runtime else None
+
+    def _past_deadline() -> bool:
+        return run_deadline is not None and time.time() >= run_deadline
+
     try:
-        # Try WebSocket first (unless disabled)
-        use_ws = not no_websocket
+        # Try WebSocket first (unless disabled).  Drain mode (--exit-when-empty)
+        # needs the HTTP long-poll path: it returns 204 on an empty queue, which
+        # is the signal to exit; the WebSocket path is push-only and never tells
+        # us the queue is empty.
+        use_ws = not no_websocket and not exit_when_empty
         if use_ws and not shutdown:
             ws_ok = _run_ws_loop()
             if ws_ok:
@@ -1334,6 +1370,14 @@ def builder_run(
 
         # HTTP long-poll fallback
         while not shutdown:
+            # Wall-clock budget: stop claiming, drain in-flight, exit.
+            if _past_deadline():
+                click.echo(
+                    f"Max runtime reached ({max_runtime:.0f}s) - "
+                    "stopping claims, finishing in-flight jobs..."
+                )
+                break
+
             # Heartbeat
             now = time.time()
             if now - last_heartbeat >= heartbeat_interval:
@@ -1361,7 +1405,15 @@ def builder_run(
                 continue
 
             if resp.status_code == 204:
-                # No job available
+                # No job available.  In drain mode, exit once nothing is left to
+                # do: an empty queue AND no in-flight jobs (which could still
+                # unlock dependent jobs when they finish).
+                if exit_when_empty:
+                    with jobs_lock:
+                        inflight = current_jobs
+                    if inflight == 0:
+                        click.echo("Queue empty - exiting (--exit-when-empty).")
+                        break
                 continue
             if resp.status_code >= 400:
                 click.echo(
