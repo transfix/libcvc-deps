@@ -166,14 +166,31 @@ forwarded port, the relay's `/etc/ssh/sshd_config` must allow a non-loopback
 bind — set `GatewayPorts clientspecified` (or `yes`) and reload sshd.
 Otherwise the `-R` bind is loopback-only and reachable just from the relay.
 
+*Config lives in one env file* so the same script and unit work unchanged
+across every builder — only this file differs per host. Create
+`/etc/cvcpkg/tunnel.env` (root-owned, `chmod 600`):
+
+```ini
+# /etc/cvcpkg/tunnel.env — reverse-tunnel config for this builder
+CVCPKG_RELAY_HOST=relay.lan       # reachable SSH host on the remote LAN
+CVCPKG_RELAY_USER=tfx
+CVCPKG_RELAY_PORT=22              # the relay's sshd port
+CVCPKG_REMOTE_BIND=0.0.0.0:2222  # where users connect ON the relay
+CVCPKG_LOCAL_SSHD=localhost:22   # this WSL instance's sshd
+CVCPKG_POLL_SECS=5
+```
+
 *Shortest form — `autossh`* (`sudo apt-get install -y autossh`), which does the
-poll-and-reconnect for you:
+poll-and-reconnect for you. For a quick manual test, source the env file first:
 
 ```bash
+set -a; . /etc/cvcpkg/tunnel.env; set +a
 autossh -M 0 -f -NT \
   -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
   -o ExitOnForwardFailure=yes -o StrictHostKeyChecking=accept-new \
-  -R 0.0.0.0:2222:localhost:22 tfx@relay.lan
+  -p "$CVCPKG_RELAY_PORT" \
+  -R "$CVCPKG_REMOTE_BIND:$CVCPKG_LOCAL_SSHD" \
+  "$CVCPKG_RELAY_USER@$CVCPKG_RELAY_HOST"
 ```
 
 *Dependency-free equivalent* — a short poller that waits for the relay, then
@@ -183,15 +200,19 @@ holds the tunnel and reconnects if it drops. Save as
 ```python
 #!/usr/bin/env python3
 """Poll a LAN relay's sshd; while reachable, hold a reverse tunnel that
-publishes this WSL builder's local sshd on the relay for remote-LAN users."""
-import socket, subprocess, time
+publishes this WSL builder's local sshd on the relay for remote-LAN users.
 
-RELAY_HOST = "relay.lan"       # reachable SSH host on the remote LAN
-RELAY_USER = "tfx"
-RELAY_PORT = 22                # the relay's sshd port
-REMOTE_BIND = "0.0.0.0:2222"   # where users connect ON the relay
-LOCAL_SSHD = "localhost:22"    # this WSL instance's sshd
-POLL_SECS = 5
+Config comes from the environment (see /etc/cvcpkg/tunnel.env); the defaults
+below only apply when a var is unset, so the same script ships to every host.
+"""
+import os, socket, subprocess, time
+
+RELAY_HOST = os.environ.get("CVCPKG_RELAY_HOST", "relay.lan")
+RELAY_USER = os.environ.get("CVCPKG_RELAY_USER", "tfx")
+RELAY_PORT = int(os.environ.get("CVCPKG_RELAY_PORT", "22"))
+REMOTE_BIND = os.environ.get("CVCPKG_REMOTE_BIND", "0.0.0.0:2222")
+LOCAL_SSHD = os.environ.get("CVCPKG_LOCAL_SSHD", "localhost:22")
+POLL_SECS = int(os.environ.get("CVCPKG_POLL_SECS", "5"))
 
 def reachable(host, port, timeout=3):
     try:
@@ -237,11 +258,14 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=tfx
+EnvironmentFile=/etc/cvcpkg/tunnel.env
 ExecStart=/usr/bin/python3 /home/tfx/bin/cvcpkg-tunnel.py
-# or, with autossh:
+# or, with autossh (systemd expands ${VAR} from EnvironmentFile):
 # ExecStart=/usr/bin/autossh -M 0 -NT \
 #   -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes \
-#   -R 0.0.0.0:2222:localhost:22 tfx@relay.lan
+#   -p ${CVCPKG_RELAY_PORT} \
+#   -R ${CVCPKG_REMOTE_BIND}:${CVCPKG_LOCAL_SSHD} \
+#   ${CVCPKG_RELAY_USER}@${CVCPKG_RELAY_HOST}
 Restart=always
 RestartSec=15
 
