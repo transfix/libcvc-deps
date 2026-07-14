@@ -76,7 +76,7 @@ jobs:
 
   dev:
     name: Dev cluster
-    runs-on: [self-hosted, Linux, cvcpkg-builder]
+    runs-on: [self-hosted, Linux, star-01]
     timeout-minutes: 10
     permissions:
       issues: write

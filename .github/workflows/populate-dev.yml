@@ -48,7 +48,7 @@ permissions:
 jobs:
   populate:
     name: Push recipes & submit builds (dev)
-    runs-on: [self-hosted, Linux, cvcpkg-builder]
+    runs-on: [self-hosted, Linux, star-01]
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v5

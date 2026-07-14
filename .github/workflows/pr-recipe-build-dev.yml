@@ -28,7 +28,7 @@ jobs:
     # Same-repo PRs only: fork PRs must not reach the self-hosted runner or
     # the dev cluster secrets.
     if: github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, Linux, cvcpkg-builder]
+    runs-on: [self-hosted, Linux, star-01]
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v5
@@ -125,4 +125,9 @@ jobs:
             echo '```'
             echo "</details>"
           } > comment.md
-          gh pr comment "${{ github.event.pull_request.number }}" --body-file comment.md
+          if command -v gh >/dev/null 2>&1; then
+            gh pr comment "${{ github.event.pull_request.number }}" --body-file comment.md
+          else
+            echo "::warning::gh CLI not on this runner; skipping PR comment"
+            cat comment.md
+          fi

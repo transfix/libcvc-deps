@@ -29,7 +29,7 @@ concurrency:
 jobs:
   deploy:
     name: Deploy to dev (star incus cluster)
-    runs-on: [self-hosted, Linux, cvcpkg-builder]
+    runs-on: [self-hosted, Linux, star-01]
     timeout-minutes: 15
 
     steps:
