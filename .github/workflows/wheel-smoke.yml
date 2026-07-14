@@ -119,9 +119,13 @@ jobs:
       - name: Smoke — bundled recipes are usable
         shell: bash
         run: |
-          # Print the listing (diagnostic) then assert a known recipe is there.
-          cvcpkg recipes --list
-          cvcpkg recipes --list | grep -q zlib
+          # Capture to a file first: piping straight into `grep -q` lets grep
+          # close the pipe early (zlib is near the end of the list), which
+          # sends cvcpkg a SIGPIPE and fails the step under `set -o pipefail`.
+          cvcpkg recipes --list > recipes.txt
+          cat recipes.txt
+          grep -q '^zlib ' recipes.txt
+          grep -q '^postgresql-server ' recipes.txt
           cvcpkg recipes --show zlib
           cvcpkg recipes --show postgresql-server
 
