@@ -517,9 +517,9 @@ class TestChunkedUpload:
         assert row["sha256"] == winner_sha
         resp = client.get(row["archive_url"], headers=hdrs)
         assert resp.status_code == 200, "winner's archive was deleted by the losing publish"
-        assert hashlib.sha256(resp.content).hexdigest() == winner_sha, (
-            "winner's archive bytes were clobbered by the losing publish"
-        )
+        assert (
+            hashlib.sha256(resp.content).hexdigest() == winner_sha
+        ), "winner's archive bytes were clobbered by the losing publish"
 
     def test_complete_does_not_clobber_existing_archive(self, db_server_env):
         """Regression: /v1/upload/{id}/complete must not clobber an on-disk
