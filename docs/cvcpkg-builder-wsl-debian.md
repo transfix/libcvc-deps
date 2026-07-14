@@ -54,6 +54,15 @@ Reopen the distro and verify: `systemctl is-system-running` should print
 matters — without it every file under `/mnt/c` is `0777` root-owned, which
 breaks anything that checks file modes.
 
+> **`uid`/`gid` must match the builder user.** The `uid=1000,gid=1000` above
+> makes the Windows mounts owned by uid 1000 — the default *first* WSL user.
+> If the builder runs as a different account (e.g. a `tfx` service user
+> created later, see §3) whose uid is **not** 1000, it won't own `/mnt/c` and
+> writes to the Windows mount will fail. Check with `id -u tfx` and set
+> `uid`/`gid` in `[automount]` to that user's ids (then `wsl --shutdown` and
+> reopen). Simplest is to make the builder user the default WSL user so it
+> gets uid 1000 and this just lines up.
+
 ## 3. Toolchain + cvcpkg
 
 Prefer cvcpkg for anything it has a recipe for; use apt only for the
