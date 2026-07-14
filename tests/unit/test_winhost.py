@@ -310,6 +310,7 @@ class TestDirectMode:
     def test_direct_paths_and_dep_rewrite(self, tmp_path, monkeypatch):
         host = _FakeHost(tmp_path, monkeypatch)
         monkeypatch.setenv("CVCPKG_WINHOST_MODE", "direct")
+        monkeypatch.setattr(winhost, "_probe_direct_access", lambda d: True)
 
         # In direct mode the "install dir the host writes to" is the WSL
         # dir itself (via UNC); mimic by writing through _to_wsl on W: of
@@ -338,10 +339,10 @@ class TestDirectMode:
         pc = (ctx.prefix / "lib" / "pkgconfig" / "zlib.pc").read_text()
         assert f"prefix=W:{ctx.prefix.resolve()}".replace("\\", "/") in pc.replace("\\", "/")
 
-    def test_auto_falls_back_to_exchange_when_probe_fails(self, tmp_path, monkeypatch):
+    def test_auto_selects_exchange(self, tmp_path, monkeypatch):
+        """auto never picks direct — cmd.exe/CMake break on UNC cwds."""
         _FakeHost(tmp_path, monkeypatch)
         monkeypatch.setenv("CVCPKG_WINHOST_MODE", "auto")
-        monkeypatch.setattr(winhost, "_probe_direct_access", lambda d: False)
 
         recipe = _make_recipe(tmp_path)
         ctx = _make_ctx(tmp_path, recipe)
@@ -350,6 +351,17 @@ class TestDirectMode:
         )
         # Exchange staging happened.
         assert (ctx.install_dir / "lib" / "fake.lib").is_file()
+
+    def test_direct_requires_host_visibility(self, tmp_path, monkeypatch):
+        _FakeHost(tmp_path, monkeypatch)
+        monkeypatch.setenv("CVCPKG_WINHOST_MODE", "direct")
+        monkeypatch.setattr(winhost, "_probe_direct_access", lambda d: False)
+        recipe = _make_recipe(tmp_path)
+        ctx = _make_ctx(tmp_path, recipe)
+        with pytest.raises(winhost.WinhostError, match="cannot access"):
+            winhost.run_winhost_build(
+                ctx, recipe.build_matrix[0], recipe.recipe_dir / "build.ps1", None
+            )
 
     def test_invalid_mode_rejected(self, tmp_path, monkeypatch):
         _FakeHost(tmp_path, monkeypatch)

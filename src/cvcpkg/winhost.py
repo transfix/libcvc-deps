@@ -25,8 +25,11 @@ Two file-exchange modes:
     native NTFS, and the install tree is synced back for the Linux side
     to pack and publish.
 
-``auto`` (default) probes whether the host can see this distro's files
-and picks ``direct`` when it can, falling back to ``exchange``.
+``auto`` (default) selects ``exchange``: although the host can usually
+read WSL files via ``\\\\wsl.localhost``, cmd.exe cannot use UNC working
+directories and CMake's MSVC link step runs through cmd.exe, so direct
+mode only suits recipes whose toolchain tolerates UNC cwds — opt in
+explicitly when that holds.
 
 Environment knobs (all optional):
 
@@ -445,8 +448,19 @@ def run_winhost_build(
         raise WinhostError(f"invalid CVCPKG_WINHOST_MODE: {mode!r}")
 
     if mode == "auto":
-        mode = "direct" if _probe_direct_access(ctx.work_dir) else "exchange"
-        _log(f"cvcpkg-winhost: auto mode resolved to '{mode}'")
+        # Exchange is the reliable default: even though the host can
+        # usually read WSL files via \\wsl.localhost, CMake's MSVC link
+        # step runs through cmd.exe, which cannot use a UNC working
+        # directory — direct mode is therefore opt-in for recipes whose
+        # toolchain tolerates UNC cwds.
+        mode = "exchange"
+
+    if mode == "direct" and not _probe_direct_access(ctx.work_dir):
+        raise WinhostError(
+            "CVCPKG_WINHOST_MODE=direct but the Windows host cannot access "
+            f"this distro's files ({ctx.work_dir} was not visible via "
+            "\\\\wsl.localhost). Use exchange mode instead."
+        )
 
     runner_src = _find_runner(ctx.recipe.recipe_dir)
 
