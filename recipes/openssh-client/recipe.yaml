@@ -1,0 +1,71 @@
+schema_version: 1
+recipe:
+  name: openssh-client
+  upstream_version: "10.4p1"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: >-
+    OpenSSH client — ssh, scp, sftp, ssh-keygen, ssh-agent, ssh-add and
+    ssh-keyscan. Built from the portable OpenSSH source; only the client
+    programs are installed (see openssh-server for sshd).
+  homepage: https://www.openssh.com/
+  license: SSH-OpenSSH
+  tags: [networking, tools, crypto]
+
+source:
+  type: tarball
+  url: https://cdn.openbsd.org/pub/OpenBSD/OpenSSH/portable/openssh-10.4p1.tar.gz
+  sha256: "ef6026dd2aea8d56059638d5d3262902c892ceba9f88395835e0d06d3fb63238"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - pkg-config
+  runtime:
+    - name: openssl
+      version: "^3.0"
+    - name: zlib
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+
+package:
+  files:
+    - bin/ssh
+    - bin/scp
+    - bin/sftp
+    - bin/ssh-add
+    - bin/ssh-agent
+    - bin/ssh-keygen
+    - bin/ssh-keyscan
+    - libexec/ssh-keysign
+    - libexec/ssh-pkcs11-helper
+    - etc/ssh/ssh_config.sample
+
+abi:
+  cxx_std: 17

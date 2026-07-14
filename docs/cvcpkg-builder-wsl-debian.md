@@ -74,42 +74,57 @@ Prefer cvcpkg for anything it has a recipe for; use apt only for the
 ```bash
 sudo apt-get update
 sudo apt-get install -y --no-install-recommends \
-  build-essential \                 # gcc/g++/make — the compiler cvcpkg drives
-  python3 python3-pip python3-venv pipx \  # runs cvcpkg
-  git curl ca-certificates \        # fetch cvcpkg + recipe sources
-  pkg-config patchelf               # host build tools cvcpkg invokes per build
+  build-essential \
+  python3 python3-pip python3-venv pipx \
+  git curl ca-certificates \
+  pkg-config patchelf
 
 pipx ensurepath
 pipx install cvcpkg
 # or, for dev against a checkout:  cd libcvc-deps && pip install -e '.[progress]'
 ```
 
+| Bootstrap package | Why it can't come from cvcpkg |
+|-------------------|-------------------------------|
+| `build-essential` | The `gcc`/`g++`/`make` that cvcpkg *drives* to build everything else. |
+| `python3*`, `pipx` | Run cvcpkg itself. |
+| `git`, `curl`, `ca-certificates` | Fetch cvcpkg and recipe sources. |
+| `pkg-config`, `patchelf` | Host build tools cvcpkg invokes during each recipe build. |
+
 **Everything else comes from cvcpkg** — these all have recipes in
 `libcvc-deps/recipes/`, so build them into a prefix rather than pulling the
 apt equivalents:
 
 ```bash
-# Build tools + the SSH/crypto stack this builder needs, into a prefix.
-cvcpkg install cmake ninja \
-               openssl zlib \
-               openssh-client openssh-server
+# One prefix holds every cvcpkg-provided tool/lib for this builder.
+export CVC_PREFIX="$HOME/cvcpkg-tools"
 
-# Put the prefix on PATH / CMAKE_PREFIX_PATH for this shell (and see §6 for
-# the systemd units, which set it too):
-eval "$(cvcpkg env)"
+# Build tools + the SSH/crypto stack this builder needs, into that prefix.
+# Prebuilt bundles come from the catalog; add --local to build from the
+# local recipes/ instead (needed until openssh-* are published to the catalog).
+cvcpkg install --prefix "$CVC_PREFIX" --local \
+    cmake ninja \
+    openssl zlib \
+    openssh-client openssh-server
+
+# Put the prefix on PATH / CMAKE_PREFIX_PATH for this shell (§6 sets the same
+# in the systemd units):
+export PATH="$CVC_PREFIX/bin:$CVC_PREFIX/sbin:$PATH"
+export CMAKE_PREFIX_PATH="$CVC_PREFIX${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}"
 ```
 
 > `cvcpkg install` names map to recipes: `cmake`, `ninja`, `openssl`, `zlib`,
 > `openssh-client`, `openssh-server` (plus their deps — `nasm`, `perl`,
-> `pkg-config` — resolve automatically). If a recipe you need is missing, add
-> it under `recipes/` rather than reaching for apt.
+> `pkg-config` — resolve automatically). Validate any recipe you touch with
+> `cvcpkg validate recipes/<name>`. If a recipe you need is missing, add it
+> under `recipes/` rather than reaching for apt.
 
 ### OpenSSL and OpenSSH from cvcpkg
 
 - **`openssl`** (recipe) builds `libssl`/`libcrypto` + headers into the
   prefix — this is what the **library we add later** links against, via
   `CMAKE_PREFIX_PATH` (no `libssl-dev` needed). It also drops the `openssl`
-  CLI in `<prefix>/bin`.
+  CLI in `$CVC_PREFIX/bin`.
 - **`openssh-client`** (recipe) provides `ssh`, `scp`, `sftp`, `ssh-keygen`,
   `ssh-agent`, `ssh-add`, `ssh-keyscan` — outbound git-over-SSH, remote
   fetches, and the `ssh-keygen` used to make host keys.
@@ -119,15 +134,21 @@ eval "$(cvcpkg env)"
 
 > **Running the cvcpkg-built `sshd` as a service.** cvcpkg installs the
 > binaries into a prefix; it does **not** do the system integration apt's
-> `openssh-server` does. Once, at deploy time:
+> `openssh-server` does. Do that once, at deploy time:
 > ```bash
 > sudo useradd -r -s /usr/sbin/nologin -d /var/empty sshd 2>/dev/null || true
-> sudo install -d -m 0755 -o root -g root /var/empty      # privsep dir
+> sudo install -d -m 0755 -o root -g root /var/empty          # privsep dir
 > sudo install -d -m 0755 /etc/ssh
-> sudo cp "$(cvcpkg prefix)/etc/ssh/sshd_config.sample" /etc/ssh/sshd_config
-> sudo "$(cvcpkg prefix)/bin/ssh-keygen" -A -f /            # host keys in /etc/ssh
+> sudo cp "$CVC_PREFIX/etc/ssh/sshd_config.sample" /etc/ssh/sshd_config
+> # host keys (config below references these paths explicitly):
+> sudo ssh-keygen -q -t ed25519 -N '' -f /etc/ssh/ssh_host_ed25519_key
+> sudo ssh-keygen -q -t rsa -b 4096 -N '' -f /etc/ssh/ssh_host_rsa_key
+> printf 'HostKey /etc/ssh/ssh_host_ed25519_key\nHostKey /etc/ssh/ssh_host_rsa_key\n' \
+>   | sudo tee -a /etc/ssh/sshd_config >/dev/null
 > ```
-> then point the sshd systemd unit at `<prefix>/sbin/sshd -f /etc/ssh/sshd_config`.
+> Then run it from a systemd unit with an explicit config path (the recipe
+> compiles `sysconfdir` into the prefix, so always pass `-f`):
+> `ExecStart=$CVC_PREFIX/sbin/sshd -D -e -f /etc/ssh/sshd_config`.
 > If you'd rather not run infra-critical sshd from a prefix, that one service
 > is the reasonable place to fall back to apt's `openssh-server`; everything
 > else stays on cvcpkg.
