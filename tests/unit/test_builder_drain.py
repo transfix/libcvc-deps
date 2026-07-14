@@ -11,10 +11,20 @@ The server is faked at the ``httpx.Client`` layer: registration succeeds,
 ``next-job`` always returns 204 (empty queue), and unregister succeeds.
 """
 
+import signal
+
 import httpx
+import pytest
 from click.testing import CliRunner
 
 from cvcpkg.cli._builder import builder_run
+
+
+@pytest.fixture(autouse=True)
+def _no_signal_handlers(monkeypatch):
+    """``builder_run`` installs global SIGINT/SIGTERM handlers; neutralize them
+    so invoking it in-process doesn't clobber the test runner's handlers."""
+    monkeypatch.setattr(signal, "signal", lambda *a, **k: None)
 
 
 class _Resp:
@@ -64,8 +74,14 @@ def _fake_client(get_status=204, calls=None):
 
 
 _BASE_ARGS = [
-    "--server", "http://test", "--token", "t",
-    "--platform", "macos", "--arch", "x86_64",
+    "--server",
+    "http://test",
+    "--token",
+    "t",
+    "--platform",
+    "macos",
+    "--arch",
+    "x86_64",
     "--no-websocket",
 ]
 
@@ -77,10 +93,13 @@ def test_exit_when_empty_exits_cleanly(monkeypatch, tmp_path):
         builder_run,
         _BASE_ARGS
         + [
-            "--name", "ci-drain",
+            "--name",
+            "ci-drain",
             "--exit-when-empty",
-            "--work-dir", str(tmp_path / "wd"),
-            "--pidfile", str(tmp_path / "b.pid"),
+            "--work-dir",
+            str(tmp_path / "wd"),
+            "--pidfile",
+            str(tmp_path / "b.pid"),
         ],
     )
     assert result.exit_code == 0, result.output
@@ -95,10 +114,14 @@ def test_max_runtime_stops_and_exits(monkeypatch, tmp_path):
         builder_run,
         _BASE_ARGS
         + [
-            "--name", "ci-timebox",
-            "--max-runtime", "0.5",
-            "--work-dir", str(tmp_path / "wd"),
-            "--pidfile", str(tmp_path / "b.pid"),
+            "--name",
+            "ci-timebox",
+            "--max-runtime",
+            "0.5",
+            "--work-dir",
+            str(tmp_path / "wd"),
+            "--pidfile",
+            str(tmp_path / "b.pid"),
         ],
     )
     assert result.exit_code == 0, result.output
@@ -114,10 +137,13 @@ def test_drain_unregisters_on_exit(monkeypatch, tmp_path):
         builder_run,
         _BASE_ARGS
         + [
-            "--name", "ci-drain",
+            "--name",
+            "ci-drain",
             "--exit-when-empty",
-            "--work-dir", str(tmp_path / "wd"),
-            "--pidfile", str(tmp_path / "b.pid"),
+            "--work-dir",
+            str(tmp_path / "wd"),
+            "--pidfile",
+            str(tmp_path / "b.pid"),
         ],
     )
     assert result.exit_code == 0, result.output
