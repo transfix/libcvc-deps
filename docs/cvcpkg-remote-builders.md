@@ -146,6 +146,18 @@ systemctl enable --now cvcpkg-builder
 schtasks /create /tn "cvcpkg-builder" /tr "cvcpkg builder run --server https://cvcpkg.org --token <TOKEN> --name sandipaws --max-jobs 2 --work-dir C:\temp\cvcpkg-builder" /sc onstart /ru tfx /rl highest
 ```
 
+### WSL2 (Debian on a Windows host) — Linux builder
+
+For Windows-only machines that should contribute **Linux** capacity, a
+builder can run inside a Debian WSL2 instance. It registers as `linux/x86_64`
+(optionally with a `wasm` cross target) — it does not build native Windows
+artifacts. The inside-the-distro setup is identical to the systemd Linux case
+above; WSL adds a boot `schtasks` task (WSL doesn't start with Windows) and
+either `networkingMode=mirrored` or a `netsh portproxy` forward so SSH is
+reachable. Full walkthrough — SSH + OpenSSL setup, the Windows-side plumbing,
+and disk cleanup / `vhdx` compaction — in
+[cvcpkg-builder-wsl-debian.md](cvcpkg-builder-wsl-debian.md).
+
 ## API Tokens
 
 | Token Name | Role | Purpose |
