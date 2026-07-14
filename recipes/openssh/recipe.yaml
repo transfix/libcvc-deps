@@ -76,3 +76,29 @@ package:
 
 abi:
   cxx_std: 17
+
+notes:
+  - title: "Platform scope — all POSIX natives; arch auto-detected"
+    platforms: [linux, macos, freebsd, openbsd, netbsd]
+    description: >-
+      One autotools build.sh per platform covers every architecture: the
+      builder's arch (x86_64, arm64, riscv64, ppc64le, s390x, …) is detected
+      by ./configure and by cvcpkg's host detection, so there is no per-arch
+      matrix entry. The matrix therefore lists the sensible maximum of native
+      targets — the same set as the curl recipe, the closest networking
+      analog.
+  - title: "Why not wasm / wasi / cosmo"
+    description: >-
+      Unlike the openssl/zlib libraries, ssh and sshd need real BSD sockets,
+      fork/exec, PTY allocation and privilege separation — none of which the
+      wasm/wasi sandboxes or the cosmopolitan (cosmo) portable-executable
+      target provide. There is no networking-daemon precedent on those
+      platforms, so they are intentionally excluded.
+  - title: "Why not native windows"
+    description: >-
+      Portable OpenSSH does not build with ./configure on native Windows;
+      Microsoft's Win32-OpenSSH is a separate codebase on its own (9.x)
+      version line. Supporting it would mean a distinct recipe that stages
+      the prebuilt Win32-OpenSSH release, not a matrix entry here. Windows
+      hosts that need a Linux builder use WSL, which builds as linux — see
+      docs/cvcpkg-builder-wsl-debian.md.
