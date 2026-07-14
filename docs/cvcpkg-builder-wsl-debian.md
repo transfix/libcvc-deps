@@ -5,16 +5,14 @@ Debian WSL2 instance on a Windows host.
 
 This produces a `linux/x86_64` builder (optionally with a `wasm` cross
 target) that lives on a Windows box. It does **not** produce native
-`windows/x86_64` artifacts — for those, use the native Windows path
-(`sandipaws` / `phm-win11`) documented in
-[cvcpkg-remote-builders.md](cvcpkg-remote-builders.md).
+`windows/x86_64` artifacts — for those, run a native Windows builder instead.
 
 The builder is the same three moving parts as every other Linux builder:
 
 1. A CMake + Ninja + C/C++ toolchain.
 2. `cvcpkg` on `PATH`, running `cvcpkg builder run …`.
-3. Kept alive by **systemd** and reachable over **SSH** so `deploy-prod.yml`
-   can `git pull` + `pip install` + restart it.
+3. Kept alive by **systemd** and reachable over **SSH** so your deploy
+   automation can `git pull` + `pip install` + restart it.
 
 WSL2 can do all three, but two things need extra plumbing that a normal VM
 does not: **headless start across Windows reboots** and **LAN-reachable
@@ -80,7 +78,7 @@ The apt line above installs **both** the SSH and the OpenSSL pieces:
 
 | Package | Provides | Why |
 |---------|----------|-----|
-| `openssh-server` | `sshd` | Lets `deploy-prod.yml` reach the builder (§4). |
+| `openssh-server` | `sshd` | Lets your deploy automation reach the builder (§4). |
 | `openssh-client` | `ssh`, `scp` | Outbound git-over-SSH, remote fetches during builds. |
 | `openssl` | `openssl` CLI + runtime `libssl` | TLS client tooling; runtime for anything linking system OpenSSL. |
 | `libssl-dev` | `libssl`/`libcrypto` headers + `.so` | **Build/link dependency** for a library we plan to add later. |
@@ -315,7 +313,7 @@ C:\builds  /srv/winbuilds  drvfs  metadata,uid=1000,gid=1000,umask=022  0  0
 
 ## 6. Persistence (two layers)
 
-**Inside the distro** — a normal systemd unit, identical to star-00/star-01:
+**Inside the distro** — a normal systemd unit, identical to any Linux builder:
 
 ```ini
 # /etc/systemd/system/cvcpkg-builder.service
@@ -358,24 +356,25 @@ schtasks /create /tn "wsl-cvcpkg-boot" /sc onstart /ru SYSTEM /rl highest ^
   /tr "wsl -d Debian -u root -e /bin/true"
 ```
 
-Running as `SYSTEM` mirrors `phm-win11`'s `schtasks /RU SYSTEM` so it runs
-without an interactive login. If you used port-forward Option B, fold the
+Running as `SYSTEM` (`/RU SYSTEM`) lets the task start without an interactive
+login. If you used port-forward Option B, fold the
 `netsh portproxy` refresh into a small script and point the task at that
 instead of `/bin/true`.
 
 ## 7. Register + verify
 
-Use a **publisher**-role token (the `builders` token, or a fresh one via
+Use a **publisher**-role token for the builder (create one with
 `cvcpkg-server token create --role publisher`). Then confirm the builder
 appears in the fleet:
 
 ```bash
-curl -H "Authorization: Bearer $TOKEN" https://cvcpkg.org/v1/builders | python3 -m json.tool
-cvcpkg builds monitor --server https://cvcpkg.org --token $TOKEN
+curl -H "Authorization: Bearer $TOKEN" "$CVCPKG_SERVER_URL/v1/builders" | python3 -m json.tool
+cvcpkg builds monitor --server "$CVCPKG_SERVER_URL" --token $TOKEN
 ```
 
-Add its SSH target (host + port + user) to the builder loop in
-`deploy-prod.yml` so it gets pulled/reinstalled/restarted with everyone else.
+If you run deploy automation that manages builders over SSH, add this
+builder's SSH target (host + port + user) to its builder list so it gets
+pulled/reinstalled/restarted with the rest.
 
 ---
 
@@ -404,8 +403,7 @@ sudo du -h -d1 / 2>/dev/null | sort -h | tail -20
 ```
 
 The cvcpkg cache under `~/.cache/cvcpkg` is the usual culprit on a busy
-builder — the same disk pressure that forces the BSD builders to clear
-`/root/.cache/cvcpkg` in `deploy-prod.yml`.
+builder; clear it periodically if the instance runs tight on disk.
 
 ### Shrink the vhdx (reclaim space back to Windows)
 
