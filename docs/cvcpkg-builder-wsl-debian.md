@@ -101,11 +101,11 @@ export CVC_PREFIX="$HOME/cvcpkg-tools"
 
 # Build tools + the SSH/crypto stack this builder needs, into that prefix.
 # Prebuilt bundles come from the catalog; add --local to build from the
-# local recipes/ instead (needed until openssh-* are published to the catalog).
+# local recipes/ instead (needed until openssh is published to the catalog).
 cvcpkg install --prefix "$CVC_PREFIX" --local \
     cmake ninja \
     openssl zlib \
-    openssh-client openssh-server
+    openssh
 
 # Put the prefix on PATH / CMAKE_PREFIX_PATH for this shell (§6 sets the same
 # in the systemd units):
@@ -114,8 +114,8 @@ export CMAKE_PREFIX_PATH="$CVC_PREFIX${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}"
 ```
 
 > `cvcpkg install` names map to recipes: `cmake`, `ninja`, `openssl`, `zlib`,
-> `openssh-client`, `openssh-server` (plus their deps — `nasm`, `perl`,
-> `pkg-config` — resolve automatically). Validate any recipe you touch with
+> `openssh` (plus their deps — `nasm`, `perl`, `pkg-config` — resolve
+> automatically). Validate any recipe you touch with
 > `cvcpkg validate recipes/<name>`. If a recipe you need is missing, add it
 > under `recipes/` rather than reaching for apt.
 
@@ -125,12 +125,11 @@ export CMAKE_PREFIX_PATH="$CVC_PREFIX${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}"
   prefix — this is what the **library we add later** links against, via
   `CMAKE_PREFIX_PATH` (no `libssl-dev` needed). It also drops the `openssl`
   CLI in `$CVC_PREFIX/bin`.
-- **`openssh-client`** (recipe) provides `ssh`, `scp`, `sftp`, `ssh-keygen`,
-  `ssh-agent`, `ssh-add`, `ssh-keyscan` — outbound git-over-SSH, remote
-  fetches, and the `ssh-keygen` used to make host keys.
-- **`openssh-server`** (recipe) provides `sshd` (+ `sshd-session`,
-  `sshd-auth`, `sftp-server`) — the daemon your deploy automation connects
-  to (§4). Both openssh recipes build against the `openssl` + `zlib` recipes.
+- **`openssh`** (recipe) provides both the client — `ssh`, `scp`, `sftp`,
+  `ssh-keygen`, `ssh-agent`, `ssh-add`, `ssh-keyscan` (outbound git-over-SSH,
+  remote fetches, host-key generation) — and the server — `sshd` (+
+  `sshd-session`, `sshd-auth`, `sftp-server`), the daemon your deploy
+  automation connects to (§4). Built against the `openssl` + `zlib` recipes.
 
 > **Running the cvcpkg-built `sshd` as a service.** cvcpkg installs the
 > binaries into a prefix; it does **not** do the system integration apt's
@@ -178,7 +177,7 @@ cvcpkg-provided tools should be the ones on `PATH`:
 ```bash
 gcc --version && python3 --version && cvcpkg --version   # bootstrap (apt)
 cmake --version && ninja --version                       # from cvcpkg prefix
-command -v ssh sshd && ssh -V                             # openssh-client/server
+command -v ssh sshd && ssh -V                             # from openssh recipe
 openssl version                                          # cvcpkg openssl CLI
 ```
 

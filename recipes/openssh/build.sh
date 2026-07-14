@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
-# recipes/openssh-server/build.sh — build the portable OpenSSH server (sshd).
-# Autotools (./configure) so cmake is not required.  The full source is
-# built (openssh has no per-program build), then only the server binaries
-# are installed with a curated `install` — this avoids `make install`'s
-# host-key generation and privsep-dir creation, which need root and would
-# pollute the host.  Host keys are generated per-machine at deploy time with
-# ssh-keygen from openssh-client.
+# recipes/openssh/build.sh — build portable OpenSSH (client + server).
+# Autotools (./configure) so cmake is not required.  A curated install (not
+# `make install`) copies just the programs + sample configs into the prefix,
+# avoiding `make install`'s host-key generation and privsep-dir creation,
+# which need root and would pollute the host.  Host keys are generated
+# per-machine at deploy time with ssh-keygen.
 set -euo pipefail
 
 : "${CVC_INSTALL_DIR:?CVC_INSTALL_DIR must be set}"
@@ -27,8 +26,8 @@ CONFIGURE_ARGS=(
 )
 
 # Link against our openssl/zlib recipes when present, and embed an $ORIGIN
-# RPATH so sshd + helpers find libcrypto/libssl/libz next to themselves in
-# any relocated prefix (sbin/ and libexec/ are one level below <prefix>/lib).
+# RPATH so the programs find libcrypto/libssl/libz next to themselves in any
+# relocated prefix (bin/, sbin/ and libexec/ are one level below <prefix>/lib).
 if [[ -n "${CVC_DEPS_PREFIX}" && -d "${CVC_DEPS_PREFIX}/include/openssl" ]]; then
     CONFIGURE_ARGS+=(--with-ssl-dir="${CVC_DEPS_PREFIX}")
     export PKG_CONFIG_PATH="${CVC_DEPS_PREFIX}/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
@@ -42,11 +41,16 @@ fi
 ./configure "${CONFIGURE_ARGS[@]}"
 make -j "${CVC_JOBS}"
 
-# Curated install — server programs + sample config only.
-mkdir -p "${CVC_INSTALL_DIR}/sbin" "${CVC_INSTALL_DIR}/libexec" "${CVC_INSTALL_DIR}/etc/ssh"
+# Curated install — client + server programs and sample configs.
+mkdir -p "${CVC_INSTALL_DIR}/bin" "${CVC_INSTALL_DIR}/sbin" \
+         "${CVC_INSTALL_DIR}/libexec" "${CVC_INSTALL_DIR}/etc/ssh"
+for b in ssh scp sftp ssh-add ssh-agent ssh-keygen ssh-keyscan; do
+    install -m 0755 "${b}" "${CVC_INSTALL_DIR}/bin/"
+done
 install -m 0755 sshd "${CVC_INSTALL_DIR}/sbin/"
-for h in sshd-session sshd-auth sftp-server; do
+for h in sshd-session sshd-auth sftp-server ssh-keysign ssh-pkcs11-helper; do
     [[ -x "${h}" ]] && install -m 0755 "${h}" "${CVC_INSTALL_DIR}/libexec/" || true
 done
+[[ -f ssh_config ]]  && install -m 0644 ssh_config  "${CVC_INSTALL_DIR}/etc/ssh/ssh_config.sample" || true
 [[ -f sshd_config ]] && install -m 0644 sshd_config "${CVC_INSTALL_DIR}/etc/ssh/sshd_config.sample" || true
 [[ -f moduli ]]      && install -m 0644 moduli      "${CVC_INSTALL_DIR}/etc/ssh/moduli" || true
