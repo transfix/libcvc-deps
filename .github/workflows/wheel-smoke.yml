@@ -119,6 +119,8 @@ jobs:
       - name: Smoke — bundled recipes are usable
         shell: bash
         run: |
+          # Print the listing (diagnostic) then assert a known recipe is there.
+          cvcpkg recipes --list
           cvcpkg recipes --list | grep -q zlib
           cvcpkg recipes --show zlib
           cvcpkg recipes --show postgresql-server
