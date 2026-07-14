@@ -1,0 +1,116 @@
+# Nightly health check for the cvcpkg deployments.
+#
+# Probes /healthz on the prod server (cvcpkg.org), the public mirror
+# (pkg.tx.wtf), and the internal dev cluster, asserts status == "ok", and
+# checks the mirror isn't significantly out of sync with prod.  On any failure
+# it files (or comments on) a GitHub issue assigned to the repo owner, who then
+# gets a GitHub notification.
+
+name: Deployment health check
+
+on:
+  schedule:
+    - cron: "0 8 * * *" # 08:00 UTC daily
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  public:
+    name: Prod + mirror
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Probe prod + mirror /healthz
+        run: |
+          set -uo pipefail
+          fail=0
+
+          # Prints packages_count to stdout; returns non-zero if unreachable or
+          # status != ok.  Called as `c=$(probe ...) || fail=1` so the failure
+          # propagates to the parent shell (command substitution runs a subshell).
+          probe() {
+            local name="$1" url="$2" body status count
+            if ! body=$(curl -fsS --max-time 15 "$url/healthz" 2>/dev/null); then
+              echo "::error::$name: /healthz unreachable ($url)" >&2
+              echo -1; return 1
+            fi
+            status=$(printf '%s' "$body" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("status",""))' 2>/dev/null || echo "")
+            count=$(printf '%s' "$body" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("packages_count",-1))' 2>/dev/null || echo -1)
+            echo "$name: status=$status packages=$count" >&2
+            echo "$count"
+            [ "$status" = "ok" ] || { echo "::error::$name: status='$status' ($url)" >&2; return 1; }
+          }
+
+          primary_count=$(probe "prod (cvcpkg.org)" "https://cvcpkg.org") || fail=1
+          mirror_count=$(probe "mirror (pkg.tx.wtf)" "https://pkg.tx.wtf") || fail=1
+
+          # Mirror sync: allow small transient lag, alert on real drift (<95%).
+          if [ "${primary_count:-0}" -gt 0 ] && [ "${mirror_count:-0}" -ge 0 ]; then
+            threshold=$(( primary_count * 95 / 100 ))
+            if [ "$mirror_count" -lt "$threshold" ]; then
+              echo "::error::mirror out of sync: prod=$primary_count mirror=$mirror_count"
+              fail=1
+            fi
+          fi
+
+          exit $fail
+
+  dev:
+    name: Dev cluster
+    runs-on: [self-hosted, Linux, cvcpkg-builder]
+    timeout-minutes: 10
+    steps:
+      - name: Probe dev /healthz
+        run: |
+          set -uo pipefail
+          IP=$(incus list cvcpkg-server -c4 -fcsv | head -1 | awk '{print $1}')
+          test -n "$IP" || { echo "::error::could not resolve dev cvcpkg-server IP"; exit 1; }
+          url="http://${IP}:8420"
+          if ! body=$(curl -fsS --max-time 15 "$url/healthz" 2>/dev/null); then
+            echo "::error::dev: /healthz unreachable ($url)"; exit 1
+          fi
+          status=$(printf '%s' "$body" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("status",""))' 2>/dev/null || echo "")
+          echo "dev: status=$status ($url)"
+          [ "$status" = "ok" ] || { echo "::error::dev: status='$status'"; exit 1; }
+
+  alert:
+    name: Alert on failure
+    needs: [public, dev]
+    if: failure()
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: File or update health-alert issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          gh label create health-alert --repo "$REPO" --color b60205 \
+            --description "Deployment health-check failure" --force 2>/dev/null || true
+
+          body=$(printf '%s\n' \
+            "A scheduled **deployment health check failed**." \
+            "" \
+            "- Run: $RUN_URL" \
+            "- Failed jobs: prod/mirror or dev \`/healthz\` (see the run for which)." \
+            "" \
+            "cc @$OWNER")
+
+          # De-dup: comment on an existing open alert instead of piling up issues.
+          existing=$(gh issue list --repo "$REPO" --label health-alert --state open \
+            --json number --jq '.[0].number' 2>/dev/null || echo "")
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$REPO" --body "$body"
+          else
+            gh issue create --repo "$REPO" \
+              --title "🚨 Deployment health check failed — $(date -u +%Y-%m-%d)" \
+              --label health-alert \
+              --assignee "$OWNER" \
+              --body "$body"
+          fi
