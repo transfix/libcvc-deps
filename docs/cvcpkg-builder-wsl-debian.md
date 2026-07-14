@@ -121,7 +121,10 @@ openssl version && pkg-config --modversion libssl   # confirms libssl-dev header
 ## 4. SSH server + client
 
 WSL2 port 22 is **not** the host's port 22 — the distro is NAT'd with its own
-IP. Pick one of two ways to make the deploy workflow able to reach sshd.
+IP. Pick one of three ways to make the deploy workflow able to reach sshd.
+**Option C is usually the best fit for WSL**: the builder dials *out* to a
+relay, so it works through NAT with no host-side port-forward and no
+dependence on the ever-changing WSL IP.
 
 **Option A — mirrored networking (simplest, Windows 11 22H2+).**
 In `%UserProfile%\.wslconfig` on the Windows side:
@@ -146,6 +149,109 @@ New-NetFirewallRule -DisplayName "WSL sshd" -Direction Inbound -LocalPort 2222 -
 ```
 
 Register the builder in the deploy target list on port 2222.
+
+**Option C — reverse SSH tunnel to a LAN relay (recommended for WSL).**
+The builder polls a reachable SSH host on the remote LAN (the *relay*) and,
+once it can connect, holds open a reverse tunnel (`ssh -R`) that publishes its
+local sshd on a port of the relay. Users/CI on the relay's LAN then reach the
+builder by connecting to that port on the relay — no inbound path into WSL is
+needed, and the outbound dial survives NAT and WSL IP churn.
+
+```
+   remote LAN user ──▶ relay.lan:2222 ──[reverse tunnel]──▶ WSL builder localhost:22
+```
+
+*Relay-side prerequisite:* to let LAN peers (not just the relay itself) use the
+forwarded port, the relay's `/etc/ssh/sshd_config` must allow a non-loopback
+bind — set `GatewayPorts clientspecified` (or `yes`) and reload sshd.
+Otherwise the `-R` bind is loopback-only and reachable just from the relay.
+
+*Shortest form — `autossh`* (`sudo apt-get install -y autossh`), which does the
+poll-and-reconnect for you:
+
+```bash
+autossh -M 0 -f -NT \
+  -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+  -o ExitOnForwardFailure=yes -o StrictHostKeyChecking=accept-new \
+  -R 0.0.0.0:2222:localhost:22 tfx@relay.lan
+```
+
+*Dependency-free equivalent* — a short poller that waits for the relay, then
+holds the tunnel and reconnects if it drops. Save as
+`/home/tfx/bin/cvcpkg-tunnel.py`:
+
+```python
+#!/usr/bin/env python3
+"""Poll a LAN relay's sshd; while reachable, hold a reverse tunnel that
+publishes this WSL builder's local sshd on the relay for remote-LAN users."""
+import socket, subprocess, time
+
+RELAY_HOST = "relay.lan"       # reachable SSH host on the remote LAN
+RELAY_USER = "tfx"
+RELAY_PORT = 22                # the relay's sshd port
+REMOTE_BIND = "0.0.0.0:2222"   # where users connect ON the relay
+LOCAL_SSHD = "localhost:22"    # this WSL instance's sshd
+POLL_SECS = 5
+
+def reachable(host, port, timeout=3):
+    try:
+        with socket.create_connection((host, port), timeout):
+            return True
+    except OSError:
+        return False
+
+while True:
+    if not reachable(RELAY_HOST, RELAY_PORT):
+        time.sleep(POLL_SECS)
+        continue
+    # -N: no shell, -T: no tty; keepalives tear down dead tunnels;
+    # ExitOnForwardFailure so a stale bind can't leave us "up" but useless.
+    subprocess.call([
+        "ssh", "-NT",
+        "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3",
+        "-o", "ExitOnForwardFailure=yes", "-o", "StrictHostKeyChecking=accept-new",
+        "-R", f"{REMOTE_BIND}:{LOCAL_SSHD}",
+        "-p", str(RELAY_PORT), f"{RELAY_USER}@{RELAY_HOST}",
+    ])
+    time.sleep(POLL_SECS)   # ssh returned => tunnel dropped; re-poll
+```
+
+Either way, the builder needs **key-based** auth to the relay (so the loop is
+non-interactive): `ssh-keygen -t ed25519`, then append the pubkey to the
+relay's `~tfx/.ssh/authorized_keys`. Users then reach the builder with:
+
+```bash
+ssh -p 2222 tfx@relay.lan     # lands on the WSL builder's sshd
+```
+
+Run the tunnel under systemd so it starts with the distro and restarts on
+drop (companion to the builder unit in §6):
+
+```ini
+# /etc/systemd/system/cvcpkg-tunnel.service
+[Unit]
+Description=cvcpkg WSL reverse SSH tunnel to LAN relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=tfx
+ExecStart=/usr/bin/python3 /home/tfx/bin/cvcpkg-tunnel.py
+# or, with autossh:
+# ExecStart=/usr/bin/autossh -M 0 -NT \
+#   -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes \
+#   -R 0.0.0.0:2222:localhost:22 tfx@relay.lan
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl enable --now cvcpkg-tunnel
+```
 
 Inside the distro, generate host keys, enable sshd, install the deploy key:
 
