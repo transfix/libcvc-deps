@@ -716,6 +716,43 @@ class TestDbBuildJobStore:
 
         self._run(_test())
 
+    def test_reap_timed_out_running_with_null_started_at(self):
+        """A running job whose started_at is NULL must still be reaped (via
+        the submitted_at fallback).  Such rows previously stayed running
+        forever and pinned a builder's current_jobs at capacity — the exact
+        way both openbsd builders wedged."""
+        import datetime
+
+        from sqlalchemy import select
+
+        from cvcpkg.server.db import BuildJobRow, get_session
+        from cvcpkg.server.db_stores import DbBuildJobStore
+
+        async def _test():
+            store = DbBuildJobStore()
+            job = await store.create(
+                recipe_name="gettext",
+                platform="openbsd",
+                arch="x86_64",
+                submitted_by="admin",
+                timeout_seconds=60,
+            )
+            old = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=3)
+            async with get_session() as session:
+                row = (
+                    await session.execute(select(BuildJobRow).where(BuildJobRow.id == job.id))
+                ).scalar()
+                row.status = BuildJobStatus.running
+                row.started_at = None  # corrupt/abandoned running row
+                row.submitted_at = old
+
+            reaped = await store.reap_timed_out(default_timeout=86400)
+            assert len(reaped) == 1
+            assert reaped[0].id == job.id
+            assert reaped[0].status == BuildJobStatus.timed_out
+
+        self._run(_test())
+
     def test_priority_ordering(self):
         from cvcpkg.server.db_stores import DbBuildJobStore
 
