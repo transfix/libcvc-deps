@@ -929,7 +929,9 @@ async def _mirror_sync_archives(state: ServerState, catalog: dict) -> int:
                 )
                 continue
 
-            tmp_path.rename(local)
+            # replace(), not rename(): the refetch path overwrites a stale
+            # local file, and Windows rename() refuses existing targets.
+            tmp_path.replace(local)
             fetched += 1
 
     if deferred:
