@@ -56,43 +56,77 @@ breaks anything that checks file modes.
 
 ## 3. Toolchain + cvcpkg
 
-Package versions below are from `libcvc-deps/BUILDING.md`.
+Prefer cvcpkg for anything it has a recipe for; use apt only for the
+**bootstrap** — the handful of things cvcpkg itself needs in order to build
+(you can't compile a C toolchain out of a package manager that needs one).
+
+**Bootstrap (apt) — the minimum cvcpkg needs to run and build:**
 
 ```bash
 sudo apt-get update
 sudo apt-get install -y --no-install-recommends \
-  build-essential cmake ninja-build patchelf pkg-config \
-  python3 python3-pip python3-venv \
-  git pipx \
-  openssh-server openssh-client \
-  openssl libssl-dev
+  build-essential \                 # gcc/g++/make — the compiler cvcpkg drives
+  python3 python3-pip python3-venv pipx \  # runs cvcpkg
+  git curl ca-certificates \        # fetch cvcpkg + recipe sources
+  pkg-config patchelf               # host build tools cvcpkg invokes per build
 
 pipx ensurepath
 pipx install cvcpkg
 # or, for dev against a checkout:  cd libcvc-deps && pip install -e '.[progress]'
 ```
 
-### OpenSSL and OpenSSH
+**Everything else comes from cvcpkg** — these all have recipes in
+`libcvc-deps/recipes/`, so build them into a prefix rather than pulling the
+apt equivalents:
 
-The apt line above installs **both** the SSH and the OpenSSL pieces:
+```bash
+# Build tools + the SSH/crypto stack this builder needs, into a prefix.
+cvcpkg install cmake ninja \
+               openssl zlib \
+               openssh-client openssh-server
 
-| Package | Provides | Why |
-|---------|----------|-----|
-| `openssh-server` | `sshd` | Lets your deploy automation reach the builder (§4). |
-| `openssh-client` | `ssh`, `scp` | Outbound git-over-SSH, remote fetches during builds. |
-| `openssl` | `openssl` CLI + runtime `libssl` | TLS client tooling; runtime for anything linking system OpenSSL. |
-| `libssl-dev` | `libssl`/`libcrypto` headers + `.so` | **Build/link dependency** for a library we plan to add later. |
+# Put the prefix on PATH / CMAKE_PREFIX_PATH for this shell (and see §6 for
+# the systemd units, which set it too):
+eval "$(cvcpkg env)"
+```
 
-> Note the two OpenSSLs in play. The line above installs the **system**
-> OpenSSL (`libssl-dev`) so host tooling and any system-linked library can
-> find headers and `libcrypto`/`libssl`. cvcpkg recipes that need OpenSSL
-> build their **own** copy from source into the cvcpkg prefix (OpenSSL's
-> recipe uses GNU Make — see `libcvc-deps/BUILDING.md`), independent of the
-> system package. Both can coexist; just be explicit in a recipe's
-> `find_package`/`CMAKE_PREFIX_PATH` about which one you intend to link.
+> `cvcpkg install` names map to recipes: `cmake`, `ninja`, `openssl`, `zlib`,
+> `openssh-client`, `openssh-server` (plus their deps — `nasm`, `perl`,
+> `pkg-config` — resolve automatically). If a recipe you need is missing, add
+> it under `recipes/` rather than reaching for apt.
+
+### OpenSSL and OpenSSH from cvcpkg
+
+- **`openssl`** (recipe) builds `libssl`/`libcrypto` + headers into the
+  prefix — this is what the **library we add later** links against, via
+  `CMAKE_PREFIX_PATH` (no `libssl-dev` needed). It also drops the `openssl`
+  CLI in `<prefix>/bin`.
+- **`openssh-client`** (recipe) provides `ssh`, `scp`, `sftp`, `ssh-keygen`,
+  `ssh-agent`, `ssh-add`, `ssh-keyscan` — outbound git-over-SSH, remote
+  fetches, and the `ssh-keygen` used to make host keys.
+- **`openssh-server`** (recipe) provides `sshd` (+ `sshd-session`,
+  `sshd-auth`, `sftp-server`) — the daemon your deploy automation connects
+  to (§4). Both openssh recipes build against the `openssl` + `zlib` recipes.
+
+> **Running the cvcpkg-built `sshd` as a service.** cvcpkg installs the
+> binaries into a prefix; it does **not** do the system integration apt's
+> `openssh-server` does. Once, at deploy time:
+> ```bash
+> sudo useradd -r -s /usr/sbin/nologin -d /var/empty sshd 2>/dev/null || true
+> sudo install -d -m 0755 -o root -g root /var/empty      # privsep dir
+> sudo install -d -m 0755 /etc/ssh
+> sudo cp "$(cvcpkg prefix)/etc/ssh/sshd_config.sample" /etc/ssh/sshd_config
+> sudo "$(cvcpkg prefix)/bin/ssh-keygen" -A -f /            # host keys in /etc/ssh
+> ```
+> then point the sshd systemd unit at `<prefix>/sbin/sshd -f /etc/ssh/sshd_config`.
+> If you'd rather not run infra-critical sshd from a prefix, that one service
+> is the reasonable place to fall back to apt's `openssh-server`; everything
+> else stays on cvcpkg.
 
 Version bar (from BUILDING.md): GCC ≥ 13, CMake ≥ 3.16 **and < 4.x** (Boost
-1.86 CMake compat), Ninja ≥ 1.10, Python ≥ 3.10.
+1.86 CMake compat), Ninja ≥ 1.10, Python ≥ 3.10. cvcpkg's `cmake` recipe is
+already pinned within this range, which is the other reason to prefer it over
+whatever apt ships.
 
 | Debian release | GCC | CMake | Notes |
 |----------------|-----|-------|-------|
@@ -108,12 +142,14 @@ install / `pipx install` as that user so `cvcpkg` lands on its `PATH`. If you
 keep a different username, change `User=` and the `ExecStart`/`PATH` in the
 unit to match.
 
-**Sanity check** the toolchain before registering:
+**Sanity check** before registering — with `eval "$(cvcpkg env)"` active, the
+cvcpkg-provided tools should be the ones on `PATH`:
 
 ```bash
-gcc --version && cmake --version && ninja --version
-python3 --version && cvcpkg --version
-openssl version && pkg-config --modversion libssl   # confirms libssl-dev headers
+gcc --version && python3 --version && cvcpkg --version   # bootstrap (apt)
+cmake --version && ninja --version                       # from cvcpkg prefix
+command -v ssh sshd && ssh -V                             # openssh-client/server
+openssl version                                          # cvcpkg openssl CLI
 ```
 
 ## 4. SSH server + client
@@ -287,22 +323,43 @@ chmod 600 ~/.ssh/authorized_keys
 
 ## 5. Mount a Windows directory
 
-WSL auto-mounts fixed drives under `/mnt` already, so `C:\builds` is at
-`/mnt/c/builds` (with Linux perms thanks to the `metadata` option). For a
-tidier path or a specific drive:
+WSL auto-mounts fixed drives under `/mnt` already, so the Windows user's home
+directory (`C:\Users\<you>`) is reachable at `/mnt/c/Users/<you>` — with Linux
+perms thanks to the `metadata` option. Rather than hardcode the username,
+resolve the running Windows user's profile path dynamically. The `wslu`
+package provides `wslvar`/`wslpath` helpers for exactly this:
 
 ```bash
-sudo mkdir -p /srv/winbuilds
-sudo mount --bind /mnt/c/builds /srv/winbuilds
-# or an explicit drvfs mount:
-# sudo mount -t drvfs 'D:\cvcpkg' /srv/winbuilds -o metadata,uid=1000,gid=1000
+sudo apt-get install -y wslu
+WINHOME="$(wslpath "$(wslvar USERPROFILE)")"   # => /mnt/c/Users/<you>
+echo "$WINHOME"
+
+# Bind it to a stable path for the builder to read/write:
+sudo mkdir -p /srv/winhome
+sudo mount --bind "$WINHOME" /srv/winhome
 ```
 
-To make a bind/drvfs mount survive a distro restart, add it to `/etc/fstab`
-(systemd honors fstab under WSL):
+Without `wslu`, ask Windows for the path directly (strip the trailing CR):
+
+```bash
+WINHOME="$(wslpath "$(cmd.exe /C 'echo %USERPROFILE%' 2>/dev/null | tr -d '\r')")"
+```
+
+To mount just a subdirectory of the user profile (e.g. a `cvcpkg` folder in
+the Windows home), point at it explicitly:
+
+```bash
+sudo mount --bind "$WINHOME/cvcpkg" /srv/winhome
+# or an explicit drvfs mount of a Windows path:
+# sudo mount -t drvfs 'C:\Users\<you>\cvcpkg' /srv/winhome -o metadata,uid=1000,gid=1000
+```
+
+To make the mount survive a distro restart, add it to `/etc/fstab` (systemd
+honors fstab under WSL). fstab can't run command substitution, so use the
+resolved literal path — the Windows username is stable per host:
 
 ```
-C:\builds  /srv/winbuilds  drvfs  metadata,uid=1000,gid=1000,umask=022  0  0
+C:\Users\<you>  /srv/winhome  drvfs  metadata,uid=1000,gid=1000,umask=022  0  0
 ```
 
 > ⚠️ **Do not put `--work-dir` on the Windows mount.** `/mnt/c` is 9P/DrvFs:
