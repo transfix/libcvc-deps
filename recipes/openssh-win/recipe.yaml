@@ -58,7 +58,7 @@ package:
     - bin/sshd-session.exe
     - bin/sshd-auth.exe
     - bin/sftp-server.exe
-    - bin/libcrypto*.dll
+    - bin/*.dll
     - etc/ssh/sshd_config.sample
 
 notes:
