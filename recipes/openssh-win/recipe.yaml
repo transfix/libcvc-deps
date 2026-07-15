@@ -20,7 +20,7 @@ source:
   # Pinned to a commit for reproducibility; bump commit + sha256 to update.
   type: tarball
   url: https://github.com/PowerShell/openssh-portable/archive/e98b11e5de035cbd0eecbddc95a87da42f14671f.tar.gz
-  sha256: "d0bf8571d8be1ae0f4bbcbad874e48e934b2a8530e98566829979c0fc00868a6"
+  sha256: "b3a08ec515bf3fc0a3e72868f5969d4402bd688750caa176d364542858aa0e39"
   strip_components: 1
 
 patches: []
