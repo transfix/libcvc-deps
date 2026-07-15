@@ -11,11 +11,13 @@ recipe:
   tags: [tools, toolchain, windows, cross]
   description: >-
     A prebuilt LLVM/Clang mingw-w64 cross-toolchain (llvm-mingw) that runs on
-    Linux and targets native Windows (x86_64 / i686 / aarch64 / armv7, UCRT).
-    It lets a Linux build host cross-compile Windows PE binaries with no Windows
-    machine and no MSVC — the GNU/Clang counterpart to cvcpkg's MSVC winhost
-    path.  Ships clang, lld, the mingw-w64 CRT + headers, libc++/libunwind, and
-    the x86_64-w64-mingw32-{gcc,g++,clang,windres,...} wrappers.
+    Linux and targets native Windows x86_64 (UCRT).  It lets a Linux build host
+    cross-compile Windows PE binaries with no Windows machine and no MSVC — the
+    GNU/Clang counterpart to cvcpkg's MSVC winhost path.  Ships clang, lld, the
+    mingw-w64 CRT + headers, libc++/libunwind, and the
+    x86_64-w64-mingw32-{gcc,g++,clang,windres,...} wrappers.  (Trimmed to the
+    x86_64 target; the upstream i686/aarch64/armv7 sysroots are dropped to keep
+    the package lean — an arm64 Windows variant can be added later.)
 
 # Consumed by cvcpkg's cross-build machinery: a builder run with
 # `--cross-platform windows-gnu` stages this toolchain and exports CVC_MINGW_DIR
@@ -53,10 +55,6 @@ package:
     - include/
     - share/
     - x86_64-w64-mingw32/
-    - i686-w64-mingw32/
-    - aarch64-w64-mingw32/
-    - armv7-w64-mingw32/
-    - arm64ec-w64-mingw32/
     - generic-w64-mingw32/
   cmake_packages: []
 
