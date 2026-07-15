@@ -748,9 +748,10 @@ cvcpkg pack zlib --output-dir dist  # build + archive
 ```
 
 **Documentation convention — diagrams are Mermaid.**  Charts, graphs, and
-architecture diagrams in project docs use fenced ```mermaid blocks (GitHub
-renders them natively) rather than ASCII art.  When editing a document that
-still contains an ASCII diagram, convert it to Mermaid as part of the change.
+architecture diagrams in project docs use fenced `mermaid` code blocks
+(GitHub renders them natively) rather than ASCII art.  When editing a
+document that still contains an ASCII diagram, convert it to Mermaid as part
+of the change.
 
 ---
 
