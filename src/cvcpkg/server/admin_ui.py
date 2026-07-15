@@ -222,9 +222,12 @@ def dashboard_html(data: dict) -> str:
         '<button class="button is-small is-light" type="submit">Sign out</button>'
         "</form></div>"
     )
+    meta_line = (
+        f"server v{_esc(stats.get('version', '?'))} · generated {generated} · window {days}d"
+    )
     body = f"""
 <h1 class="title is-4">Overview
-  <span class="is-size-7 has-text-weight-normal cvc-muted">server v{_esc(stats.get("version", "?"))} · generated {generated} · window {days}d</span>
+  <span class="is-size-7 has-text-weight-normal cvc-muted">{meta_line}</span>
 </h1>
 <div class="columns is-multiline">{cards}</div>
 
