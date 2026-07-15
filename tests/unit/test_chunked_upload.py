@@ -604,3 +604,101 @@ class TestChunkedUpload:
             f"on-disk archive was clobbered: got sha={on_disk_sha}, "
             f"expected winner sha={winner_sha}"
         )
+
+    def test_complete_upload_org_scoped(self, db_server_env):
+        """Regression: a chunked upload with ?org= must land in the org,
+        carrying org= on the bundle. Previously /v1/upload/init dropped the
+        org param, so org publishes over the 10 MB chunked threshold
+        silently went to the public catalog with org=''."""
+        client, _, pub_token, _, _ = db_server_env
+        hdrs = self._admin_headers(pub_token)
+
+        # Publisher creates the org (becomes owner/member).
+        resp = client.post(
+            "/v1/orgs",
+            json={"slug": "acme", "display_name": "Acme"},
+            headers=hdrs,
+        )
+        assert resp.status_code == 200, resp.text
+
+        # Chunked upload scoped to the org.
+        resp = client.post(
+            "/v1/upload/init",
+            params={
+                "name": "widget",
+                "version": "1.0.0",
+                "platform": "linux",
+                "arch": "x86_64",
+                "org": "acme",
+            },
+            headers=hdrs,
+        )
+        assert resp.status_code == 201, resp.text
+        upload_id = resp.json()["upload_id"]
+
+        content = b"acme scoped archive bytes"
+        resp = client.patch(
+            f"/v1/upload/{upload_id}",
+            content=content,
+            headers={**hdrs, "Content-Type": "application/octet-stream"},
+        )
+        assert resp.status_code == 200
+
+        sha256 = hashlib.sha256(content).hexdigest()
+        resp = client.post(
+            f"/v1/upload/{upload_id}/complete",
+            params={"expected_sha256": sha256},
+            headers=hdrs,
+        )
+        assert resp.status_code == 200, resp.text
+
+        # The bundle carries org='acme' (not '') ...
+        cat = client.get("/v1/catalog", params={"org": "acme"}, headers=hdrs).json()
+        widget = [b for b in cat["bundles"] if b["name"] == "widget"]
+        assert widget, "widget not found in the acme org catalog"
+        assert widget[0].get("org") == "acme", f"org not propagated: {widget[0].get('org')!r}"
+
+        # ... and appears in the org's own package listing.
+        org = client.get("/v1/orgs/acme", headers=hdrs).json()
+        assert "widget" in [pkg["name"] for pkg in org.get("packages", [])]
+
+    def test_init_org_non_member_forbidden(self, db_server_env):
+        """A publisher who is not a member of the org cannot init an
+        org-scoped chunked upload (403)."""
+        client, admin_token, pub_token, _, _ = db_server_env
+        # Admin creates the org; the publisher is not added as a member.
+        resp = client.post(
+            "/v1/orgs",
+            json={"slug": "locked", "display_name": "Locked"},
+            headers=self._admin_headers(admin_token),
+        )
+        assert resp.status_code == 200, resp.text
+
+        resp = client.post(
+            "/v1/upload/init",
+            params={
+                "name": "widget",
+                "version": "1.0.0",
+                "platform": "linux",
+                "arch": "x86_64",
+                "org": "locked",
+            },
+            headers=self._admin_headers(pub_token),
+        )
+        assert resp.status_code == 403, resp.text
+
+    def test_init_org_not_found(self, db_server_env):
+        """Org-scoped init against a nonexistent org returns 404."""
+        client, _, pub_token, _, _ = db_server_env
+        resp = client.post(
+            "/v1/upload/init",
+            params={
+                "name": "widget",
+                "version": "1.0.0",
+                "platform": "linux",
+                "arch": "x86_64",
+                "org": "ghost",
+            },
+            headers=self._admin_headers(pub_token),
+        )
+        assert resp.status_code == 404, resp.text

@@ -332,6 +332,7 @@ class UploadSession:
     maintainer: str = ""
     tags: str = ""
     required_deps: str = "[]"
+    org: str = ""
     hasher: hashlib._Hash = field(default_factory=lambda: hashlib.sha256())
     bytes_received: int = 0
     total_size: int = 0  # 0 = unknown
@@ -2815,6 +2816,7 @@ def create_app(
         maintainer: str = Query(""),
         pkg_tags: str = Query("", alias="tags"),
         required_deps: str = Query("[]", description="JSON-encoded runtime deps"),
+        org: str = Query("", description="Organization slug for scoped packages"),
         actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
     ):
         """Initialise a chunked upload session.
@@ -2831,6 +2833,15 @@ def create_app(
         _check_rate_limit(request)
         _purge_expired_sessions()
         state = _get_state()
+
+        # Validate org membership up front (parity with /v1/publish); the
+        # storage limit is re-checked at completion when the byte count is known.
+        if org and _use_db and _db_orgs is not None:
+            org_info = await _db_orgs.get(org)
+            if org_info is None:
+                raise HTTPException(404, f"organization '{org}' not found")
+            if not await _db_orgs.is_member(org, actor.name):
+                raise HTTPException(403, f"you are not a member of organization '{org}'")
 
         if total_size > MAX_UPLOAD_BYTES:
             raise HTTPException(
@@ -2889,6 +2900,7 @@ def create_app(
             tags=pkg_tags,
             required_deps=required_deps,
             actor_name=actor.name,
+            org=org,
             temp_path=tmp_path,
             total_size=total_size,
         )
@@ -3059,6 +3071,13 @@ def create_app(
 
         import datetime
 
+        # Enforce the org storage limit now that the real size is known.
+        if session.org and _db_orgs is not None:
+            if not await _db_orgs.check_storage_limit(session.org, size_bytes):
+                session.temp_path.unlink(missing_ok=True)
+                _upload_sessions.pop(upload_id, None)
+                raise HTTPException(413, f"organization '{session.org}' storage limit exceeded")
+
         if _use_db:
             try:
                 await _db_packages.add_package(
@@ -3080,6 +3099,7 @@ def create_app(
                     pkg_license=session.pkg_license,
                     maintainer=session.maintainer,
                     tags=session.tags,
+                    org_slug=session.org,
                     published_by=actor.name,
                     required_deps=session.required_deps,
                 )
@@ -3092,6 +3112,9 @@ def create_app(
 
             # Row committed — materialize the archive at its final name.
             session.temp_path.replace(dest)  # overwrite-safe on Windows
+
+            if session.org and _db_orgs is not None:
+                await _db_orgs.update_storage_used(session.org, size_bytes)
 
             await _db_audit.record(
                 action=AuditAction.publish,
@@ -3115,6 +3138,7 @@ def create_app(
                 "archive_url": archive_url,
                 "published_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
                 "yanked": False,
+                "org": session.org,
                 "signature": session.signature,
                 "key_fingerprint": session.key_fingerprint,
                 "release_tag": session.release_tag,
