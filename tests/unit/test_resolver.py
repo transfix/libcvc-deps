@@ -214,9 +214,7 @@ class TestNonSemverVersions:
 
     def test_parseable_candidates_preferred(self):
         reqs = [ComponentReq(name="foo")]
-        candidates = {
-            "foo": [_entry("foo", "2.0beta+cvc.1"), _entry("foo", "1.9.0+cvc.1")]
-        }
+        candidates = {"foo": [_entry("foo", "2.0beta+cvc.1"), _entry("foo", "1.9.0+cvc.1")]}
         result = resolve(reqs, candidates)
         assert result.picked["foo"].version == "1.9.0+cvc.1"
 
