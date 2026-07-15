@@ -5874,6 +5874,7 @@ class TestWaitForDagsUnschedulable:
         assert "cancelled" in _TERMINAL_STATUSES
         assert "timed_out" in _TERMINAL_STATUSES
 
+
 def test_python_dash_m_exits_nonzero_on_error():
     """``python -m cvcpkg`` must propagate main()'s return code — a
     silent exit 0 on errors breaks scripted bootstraps (set -e)."""
