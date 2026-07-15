@@ -416,6 +416,17 @@ deliberately language-agnostic.  Future expansion:
 - **Conan compatibility layer** — consume Conan recipes as cvcpkg recipes.
 - **vcpkg manifest mode** — read `vcpkg.json` and resolve packages from the
   cvcpkg archive.
+- **cpkg integration** ([getcpkg.net](https://getcpkg.net/)) — cpkg is a
+  Lua + Ninja project/dependency tool for C/C++ (decentralized, script-driven
+  builds; Windows + Linux).  Two-way friendliness with that community:
+  1. a **`cpkg` recipe** so the tool itself installs from the cvcpkg archive
+     (see Planned Recipes), and
+  2. a **cvcpkg Lua helper for `cpkg.lua` scripts** — e.g.
+     `cvcpkg.dependency("boost")` inside `add_dependency()` resolves a
+     pinned, prebuilt binary from cvcpkg.org into the project prefix instead
+     of re-building from source.  cpkg keeps its build scripting; cvcpkg
+     supplies the full-fledged binary package manager underneath (catalog,
+     signing, reproducible LTS pins, cross-platform archive).
 
 ### Phase 5 — Federation & Scaling
 
@@ -660,6 +671,7 @@ flowchart LR
 | **Emulation / Virtualization** | qemu, dtc (device-tree compiler), libslirp, capstone | qemu itself as a package, plus emulated builders (Phase 9). Most of qemu's dependency stack already exists as recipes: glib, pixman, zlib, curl, libffi, meson/ninja. |
 | **Python wheels (Phase 7)** | numpy, scipy, h5py, mpi4py, … × {cp311, cp312, cp313, cp313t} | per-interpreter wheel matrix; the cp313t column ships provably no-GIL-safe packages. |
 | **Bootstrap (Phase 8)** | cvcpkg (self-install), cvpkg (APE) | cvcpkg installable by cvcpkg; single-binary zero-dependency bootstrap. |
+| **C/C++ tooling** | cpkg ([getcpkg.net](https://getcpkg.net/)) | ship the Lua+Ninja project tool as a recipe, plus a cvcpkg Lua resolver helper so `cpkg.lua` scripts pull prebuilt cvcpkg binaries (see Phase 4 Interoperability). |
 
 ### Recipe Categories
 
