@@ -1075,9 +1075,7 @@ def builder_run(
             # previous cleanup globbed `cvcpkg-<recipe>-*` and deleted a
             # sibling variant's still-in-use work dir mid-build, which raised
             # FileNotFoundError at staging.mkdir() in the losing variant.
-            job_root = Path(
-                tempfile.mkdtemp(prefix=f"cvcpkg-job-{recipe_name}-", dir=work_root)
-            )
+            job_root = Path(tempfile.mkdtemp(prefix=f"cvcpkg-job-{recipe_name}-", dir=work_root))
             dep_prefix = Path(
                 tempfile.mkdtemp(prefix=f"cvcpkg-prefix-{recipe_name}-", dir=job_root)
             )
