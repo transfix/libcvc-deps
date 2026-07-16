@@ -38,8 +38,17 @@ fi
 
 # ── 2. Clone sources ────────────────────────────────────────────────────
 cd "${CVC_BUILD_DIR}"
-[[ -d haiku ]]      || git clone --depth 1 --branch "${HAIKU_REF}"      "${HAIKU_REPO}"      haiku
+# Full single-branch clone of haiku (NOT --depth 1): the image build stamps
+# a revision via `git describe --tags`, and the HaikuPorts binary packages
+# depend on that exact `haiku` version (e.g. r1~beta5_hrev57937_5). A
+# shallow clone has no tag history, so describe fails or produces a version
+# lower than the packages require, deadlocking the package solver
+# ("nothing provides haiku>=..."). The full branch history lets describe
+# compute the real revision that matches the HaikuPorts repo.
+[[ -d haiku ]]      || git clone --single-branch --branch "${HAIKU_REF}"  "${HAIKU_REPO}"      haiku
 [[ -d buildtools ]] || git clone --depth 1 --branch "${BUILDTOOLS_REF}" "${BUILDTOOLS_REPO}" buildtools
+# Make sure the release tags are present for `git describe`.
+git -C haiku fetch --tags --quiet origin 2>/dev/null || true
 
 # Drop in the builder-anyboot profile.
 cp "${RECIPE_DIR}/UserBuildConfig" haiku/build/jam/UserBuildConfig
@@ -62,11 +71,11 @@ if [[ ! -e generated/build/BuildConfig && ! -e generated.x86_64/build/BuildConfi
 fi
 
 # ── 4. Build the custom anyboot image ───────────────────────────────────
-# The image build runs `git describe --tags` to stamp a revision; our
-# shallow clone has no tags, so it fails ("No names found"). Set the
-# revision explicitly (r1beta5 == hrev57937) — it is a cosmetic version
-# label baked into the image.
-export HAIKU_REVISION="${HAIKU_REVISION:-hrev57937}"
+# Let the build compute the revision itself (git describe on the full clone
+# above) so the `haiku` package version matches the HaikuPorts repo. Do NOT
+# force HAIKU_REVISION — a forced/lower value deadlocks the package solver.
+# (Only set HAIKU_REVISION as a last resort if describe still fails, to the
+# exact `git describe --tags` output, not a bare tag.)
 jam -q -j"${JOBS}" @builder-anyboot
 
 ANYBOOT="$(ls -1 generated*/haiku-builder-anyboot.iso 2>/dev/null | head -1)"
