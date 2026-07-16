@@ -47,12 +47,33 @@ cd "${CVC_BUILD_DIR}"
 # compute the real revision that matches the HaikuPorts repo.
 [[ -d haiku ]]      || git clone --single-branch --branch "${HAIKU_REF}"  "${HAIKU_REPO}"      haiku
 [[ -d buildtools ]] || git clone --depth 1 --branch "${BUILDTOOLS_REF}" "${BUILDTOOLS_REPO}" buildtools
-# Force-fetch ALL tags with an explicit refspec — a --single-branch clone
-# sets a restricted fetch refspec, so a plain `fetch --tags` pulls nothing,
-# leaving `git describe` with "No names found". This gives it the release
-# tags so it computes the real revision (matching the HaikuPorts repo).
-git -C haiku fetch --quiet origin "+refs/tags/*:refs/tags/*" 2>/dev/null || true
-echo "haiku git-describe: $(git -C haiku describe --tags 2>/dev/null || echo '(none)')"
+# Revision determination. Haiku stamps a revision with
+#   git describe --dirty --tags --match=hrev* --abbrev=1
+# which needs hrev* tags. The GitHub mirror (github.com/haiku/haiku) carries
+# NO tags at all — verified via `git ls-remote --tags` and the GitHub API —
+# so describe finds nothing and determine_haiku_revision aborts ("you are
+# using a Haiku clone without tags"). The hrev* tags live only on the
+# official repo, so add it as a supplementary remote and fetch just those
+# tags. Best effort: some networks block git.haiku-os.org.
+git -C haiku remote add haiku-official \
+    "${HAIKU_OFFICIAL_REPO:-https://git.haiku-os.org/haiku}" 2>/dev/null || true
+git -C haiku fetch --quiet --no-tags haiku-official \
+    "+refs/tags/hrev*:refs/tags/hrev*" 2>/dev/null || true
+DESC="$(git -C haiku describe --tags --match='hrev*' --dirty --abbrev=1 2>/dev/null || true)"
+echo "haiku git-describe(hrev*): ${DESC:-(none)}"
+
+# If the tag fetch worked, let the build compute the revision itself (exact
+# and self-updating as the branch advances). If it did NOT (no hrev tags
+# reachable), pin HAIKU_REVISION to the revision the r1beta5 HaikuPorts
+# packages actually require: version becomes r1~beta5_hrev57937_5, matching
+# the observed constraint `haiku>=r1~beta5_hrev57937_5`. A bare/too-low value
+# (e.g. plain hrev57937 → r1~beta5_hrev57937, which sorts BELOW _5) deadlocks
+# the package solver with "nothing provides haiku>=...". Haiku's build imports
+# HAIKU_REVISION from the environment, bypassing the describe path entirely.
+if [[ -z "${DESC}" ]]; then
+    export HAIKU_REVISION="${HAIKU_REVISION:-hrev57937_5}"
+    echo "No hrev tags reachable — pinning HAIKU_REVISION=${HAIKU_REVISION}"
+fi
 
 # Drop in the builder-anyboot profile.
 cp "${RECIPE_DIR}/UserBuildConfig" haiku/build/jam/UserBuildConfig
@@ -75,11 +96,11 @@ if [[ ! -e generated/build/BuildConfig && ! -e generated.x86_64/build/BuildConfi
 fi
 
 # ── 4. Build the custom anyboot image ───────────────────────────────────
-# Let the build compute the revision itself (git describe on the full clone
-# above) so the `haiku` package version matches the HaikuPorts repo. Do NOT
-# force HAIKU_REVISION — a forced/lower value deadlocks the package solver.
-# (Only set HAIKU_REVISION as a last resort if describe still fails, to the
-# exact `git describe --tags` output, not a bare tag.)
+# The revision is resolved in step 2 above: either from real hrev* tags
+# (fetched from the official repo → describe computes it exactly) or, if those
+# aren't reachable, from the HAIKU_REVISION fallback exported there. Haiku's
+# build imports HAIKU_REVISION from the environment, so nothing extra is
+# needed here — a correctly-set value flows straight into the package version.
 jam -q -j"${JOBS}" @builder-anyboot
 
 ANYBOOT="$(ls -1 generated*/haiku-builder-anyboot.iso 2>/dev/null | head -1)"
