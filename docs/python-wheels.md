@@ -65,6 +65,17 @@ python:
 The builder exports `CVC_PYTHON_ABI`, `CVC_PYTHON_INTERPRETER`, and (for
 free-threaded ABIs) `PYTHON_GIL=0` into the build environment.
 
+### Stable-ABI (`abi3`) packages collapse the matrix
+
+`abi` also accepts **`abi3`**. A stable-ABI wheel is version-independent, so
+one artifact serves every interpreter from `interpreter` upwards and the
+package needs a *single* recipe rather than one per column. `cryptography` is
+the motivating case — it ships `cp311-abi3` wheels covering cp311/cp312/cp313.
+
+`abi3` is never free-threaded: **the 3.13 free-threaded build does not
+implement the stable ABI**, so an abi3 wheel must not be read as cp313t
+coverage. `PythonSpec.free_threaded` is correspondingly false for it.
+
 ## Platform-keyed artifacts
 
 A wheel is per-platform, so artifacts reuse the same `platform-arch` keyed map the

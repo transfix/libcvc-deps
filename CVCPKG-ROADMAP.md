@@ -779,6 +779,32 @@ Python, no compiler, no package manager.
       wheel matrix + entry-point shims) and becomes the recommended
       install path for build machines.
 
+**Dependency survey (2026-07-16).** Auditing cvcpkg's own non-optional
+runtime closure against PyPI turned up two constraints that shape this work:
+
+| dependency | shape | note |
+|---|---|---|
+| click, httpx, httpcore, h11, certifi, idna, anyio, sniffio, typing_extensions | pure Python (`py3-none-any`) | one `platform: any` recipe each — no matrix |
+| sqlalchemy | pure Python **and** cp-tagged speedups | either column works |
+| **cryptography** | **`cp311-abi3`** (26/45 wheels) | stable ABI — one wheel serves cp311+ |
+| **PyYAML**, **greenlet** | cp-tagged, **no cp313t**, no abi3 | free-threaded column does not exist upstream |
+
+1. **abi3 collapses the matrix.**  A stable-ABI wheel is version-independent,
+   so `cryptography` is *one* recipe, not four.  The `python:` block accepts
+   `abi: abi3` for exactly this case.
+2. **cvcpkg cannot yet self-install onto `python313t`.**  PyYAML and greenlet
+   publish no free-threaded wheels, and the 3.13 free-threaded build does not
+   implement the stable ABI, so `cryptography`'s abi3 wheel does not cover it
+   either.  The self-install recipe therefore targets **`python313`** (as
+   this phase already specifies); a `python313t` self-install needs those
+   dependencies built from sdist via `python_sdist` — which is the concrete
+   next step, not a blocker on the default path.
+
+   There is an irony worth stating plainly: Phase 7 lets cvcpkg *prove* numpy
+   works with the GIL disabled, while cvcpkg itself cannot yet run GIL-disabled
+   from wheels.  That gap is upstream's, and it is exactly the gap the
+   `python_sdist` type exists to close.
+
 #### `cvpkg` — an Actually Portable Executable bootstrap
 
 - [ ] **APE build toolchain** — use `cosmocc` (already a cvcpkg recipe and

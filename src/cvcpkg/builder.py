@@ -113,19 +113,38 @@ class PythonSpec:
     """
 
     interpreter: str = ""  # cvcpkg recipe name, e.g. "python313t"
-    abi: str = ""  # wheel ABI tag, e.g. "cp313t"
+    abi: str = ""  # wheel ABI tag, e.g. "cp313t", or "abi3"
     manylinux_min: str = ""  # e.g. "manylinux_2_28"
     build_isolation: bool = False
     build_requires: list[str] = field(default_factory=list)
 
     @property
+    def stable_abi(self) -> bool:
+        """True for a stable-ABI (``abi3``) wheel.
+
+        One abi3 wheel serves every interpreter from ``interpreter`` upwards,
+        so such a package collapses the matrix to a single column instead of
+        one recipe per interpreter.
+        """
+        return self.abi == "abi3"
+
+    @property
     def free_threaded(self) -> bool:
-        """True for the GIL-disabled ABI (``cp313t``), which we test at -X gil=0."""
+        """True for the GIL-disabled ABI (``cp313t``), which we test at -X gil=0.
+
+        Never true for abi3: the 3.13 free-threaded build does not implement
+        the stable ABI, so a stable-ABI wheel cannot cover cp313t.
+        """
         return self.abi.endswith("t")
 
     @property
     def version_tag(self) -> str:
-        """``cp313t`` -> ``3.13``: the X.Y the interpreter reports."""
+        """``cp313t`` -> ``3.13``: the X.Y the interpreter reports.
+
+        Empty for abi3, which pins no single version by construction.
+        """
+        if self.stable_abi:
+            return ""
         digits = "".join(c for c in self.abi if c.isdigit())
         if len(digits) < 3:
             return ""

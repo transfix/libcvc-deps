@@ -80,6 +80,22 @@ class TestPythonSpec:
     def test_version_tag(self, abi, ver):
         assert PythonSpec(abi=abi).version_tag == ver
 
+    def test_abi3_is_stable_abi(self):
+        # cryptography and friends ship cp311-abi3 wheels: one artifact serves
+        # every interpreter from the floor upwards, collapsing the matrix.
+        s = PythonSpec(interpreter="python311", abi="abi3")
+        assert s.stable_abi is True
+        assert s.version_tag == ""  # pins no single version by construction
+
+    def test_abi3_is_never_free_threaded(self):
+        # The 3.13 free-threaded build does not implement the stable ABI, so
+        # abi3 must never be mistaken for cp313t coverage.
+        assert PythonSpec(abi="abi3").free_threaded is False
+
+    @pytest.mark.parametrize("abi", ["cp311", "cp312", "cp313", "cp313t"])
+    def test_versioned_abis_are_not_stable_abi(self, abi):
+        assert PythonSpec(abi=abi).stable_abi is False
+
     def test_build_isolation_defaults_off(self):
         # The hermeticity payoff: sdists link the prefix's cvcpkg C libs, so
         # isolation must not silently pull pip's own copies.

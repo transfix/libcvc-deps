@@ -191,11 +191,15 @@ $defs:
         description: "cvcpkg interpreter recipe this artifact targets, e.g. python313t"
       abi:
         type: string
-        pattern: "^cp3[0-9]{2}t?$"
+        pattern: "^(cp3[0-9]{2}t?|abi3)$"
         description: >
-          CPython ABI tag the artifact is built for (cp311 … cp313t).  A
-          trailing 't' is the free-threaded (no-GIL) ABI, whose test step
-          runs with the GIL disabled.
+          CPython ABI tag the artifact is built for (cp311 … cp313t), or
+          abi3 for a stable-ABI wheel.  A trailing 't' is the free-threaded
+          (no-GIL) ABI, whose test step runs with the GIL disabled.  abi3
+          wheels are version-independent, so one recipe covers every
+          interpreter from `interpreter` upwards and the matrix collapses to
+          a single column — note the 3.13 free-threaded build does not
+          support the stable ABI, so abi3 never implies cp313t coverage.
       manylinux_min:
         type: string
         pattern: "^manylinux_[0-9]+_[0-9]+$"
