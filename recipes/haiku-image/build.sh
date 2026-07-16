@@ -47,8 +47,12 @@ cd "${CVC_BUILD_DIR}"
 # compute the real revision that matches the HaikuPorts repo.
 [[ -d haiku ]]      || git clone --single-branch --branch "${HAIKU_REF}"  "${HAIKU_REPO}"      haiku
 [[ -d buildtools ]] || git clone --depth 1 --branch "${BUILDTOOLS_REF}" "${BUILDTOOLS_REPO}" buildtools
-# Make sure the release tags are present for `git describe`.
-git -C haiku fetch --tags --quiet origin 2>/dev/null || true
+# Force-fetch ALL tags with an explicit refspec — a --single-branch clone
+# sets a restricted fetch refspec, so a plain `fetch --tags` pulls nothing,
+# leaving `git describe` with "No names found". This gives it the release
+# tags so it computes the real revision (matching the HaikuPorts repo).
+git -C haiku fetch --quiet origin "+refs/tags/*:refs/tags/*" 2>/dev/null || true
+echo "haiku git-describe: $(git -C haiku describe --tags 2>/dev/null || echo '(none)')"
 
 # Drop in the builder-anyboot profile.
 cp "${RECIPE_DIR}/UserBuildConfig" haiku/build/jam/UserBuildConfig
