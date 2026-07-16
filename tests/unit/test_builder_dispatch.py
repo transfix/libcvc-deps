@@ -19,9 +19,14 @@ from cvcpkg.server.app import _choose_builder
 
 def _builder(org="", platform="linux", arch="x86_64", cross=None, cur=0, mx=2, aff=False, id=1):
     return NS(
-        id=id, org_slug=org, platform=platform, arch=arch,
+        id=id,
+        org_slug=org,
+        platform=platform,
+        arch=arch,
         capabilities={"cross_platforms": cross or []},
-        current_jobs=cur, max_jobs=mx, prefer_affinity=aff,
+        current_jobs=cur,
+        max_jobs=mx,
+        prefer_affinity=aff,
     )
 
 
