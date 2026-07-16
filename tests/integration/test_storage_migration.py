@@ -90,6 +90,23 @@ class _Server:
         self.proc.join(timeout=5)
 
 
+def _clean_env() -> dict[str, str]:
+    """Env forcing YAML-index mode, independent of the ambient environment.
+
+    The Docker test stack exports CVCPKG_DATABASE_URL (and may export
+    CVCPKG_SERVER_STATE_DIR).  Both the CLI and the spawned server read those,
+    so an inherited value would put the CLI in DB mode while these tests drive
+    the YAML index — the token would land in the DB the server never reads
+    (401 on publish) and `storage migrate` would enumerate an empty DB catalog
+    instead of the seeded index.  Every subprocess here gets them scrubbed;
+    state dirs are always passed explicitly via --state-dir.
+    """
+    env = os.environ.copy()
+    env.pop("CVCPKG_DATABASE_URL", None)
+    env.pop("CVCPKG_SERVER_STATE_DIR", None)
+    return env
+
+
 def _cli(*args: str) -> subprocess.CompletedProcess:
     """Run `cvcpkg-server <args>` via the current interpreter."""
     return subprocess.run(
@@ -97,6 +114,7 @@ def _cli(*args: str) -> subprocess.CompletedProcess:
         capture_output=True,
         text=True,
         timeout=60,
+        env=_clean_env(),
     )
 
 
