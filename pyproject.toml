@@ -80,6 +80,9 @@ httpx = ">=0.24"
 pytest-asyncio = ">=0.21"
 jsonschema = ">=4.0"
 aiosqlite = ">=0.20"
+# S3 storage-migration integration test mocks the S3 API (Garage-compatible);
+# pulls boto3 so cvcpkg's real s3:// backend is exercised.
+moto = { version = ">=5.0", extras = ["s3"] }
 
 [tool.poetry.scripts]
 cvcpkg = "cvcpkg.cli:cli"
