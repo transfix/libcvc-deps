@@ -44,6 +44,15 @@ cd "${CVC_BUILD_DIR}"
 # Drop in the builder-anyboot profile.
 cp "${RECIPE_DIR}/UserBuildConfig" haiku/build/jam/UserBuildConfig
 
+# Build Haiku's Jam and put it on PATH — configure builds the cross-tools
+# with make, but the image build (@builder-anyboot) is driven by jam, which
+# is NOT installed system-wide.
+( cd buildtools/jam && make )
+JAM_BIN="$(find "${CVC_BUILD_DIR}/buildtools/jam" -maxdepth 2 -type f -name jam -perm -u+x 2>/dev/null | head -1)"
+[[ -n "${JAM_BIN}" ]] || { echo "jam did not build in buildtools/jam" >&2; exit 1; }
+export PATH="$(dirname "${JAM_BIN}"):${PATH}"
+echo "Using jam: ${JAM_BIN}"; jam -v 2>/dev/null || true
+
 # ── 3. Configure (builds the cross-toolchain) ───────────────────────────
 cd haiku
 if [[ ! -e generated/build/BuildConfig && ! -e generated.x86_64/build/BuildConfig ]]; then
