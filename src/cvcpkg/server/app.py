@@ -234,8 +234,7 @@ def _reject_noncanonical_platform_arch(platform: str, arch: str) -> None:
         suffix = f" (did you mean '{hint}'?)" if hint else ""
         raise HTTPException(
             422,
-            f"non-canonical arch '{arch}'; expected one of "
-            f"{sorted(CANONICAL_ARCHES)}{suffix}",
+            f"non-canonical arch '{arch}'; expected one of " f"{sorted(CANONICAL_ARCHES)}{suffix}",
         )
 
 

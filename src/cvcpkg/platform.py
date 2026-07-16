@@ -6,29 +6,47 @@ import platform
 import struct
 import sys
 
-
 # Canonical vocabularies for the package keyspace. The catalog is keyed by
 # these exact strings; every ingestion boundary (CLI detection, composite
 # actions, server publish endpoints) must normalize to them. Raw machine
 # names are per-OS-inconsistent (Linux 'aarch64' vs macOS 'arm64', BSD
 # 'amd64' vs 'x86_64'), so the canonical set — not uname output — is the
 # single source of truth.
-CANONICAL_PLATFORMS = frozenset({
-    "linux", "macos", "windows", "windows-gnu",
-    "freebsd", "openbsd", "netbsd", "dragonflybsd",
-    "wasm", "wasi", "cosmo",
-    "any",  # platform-independent bundles (builder.py 'any' fallback)
-})
+CANONICAL_PLATFORMS = frozenset(
+    {
+        "linux",
+        "macos",
+        "windows",
+        "windows-gnu",
+        "freebsd",
+        "openbsd",
+        "netbsd",
+        "dragonflybsd",
+        "wasm",
+        "wasi",
+        "cosmo",
+        "any",  # platform-independent bundles (builder.py 'any' fallback)
+    }
+)
 
-CANONICAL_ARCHES = frozenset({
-    "x86_64", "arm64", "riscv64", "ppc64le", "ppc64", "s390x",
-    "wasm32",
-    "any",
-})
+CANONICAL_ARCHES = frozenset(
+    {
+        "x86_64",
+        "arm64",
+        "riscv64",
+        "ppc64le",
+        "ppc64",
+        "s390x",
+        "wasm32",
+        "any",
+    }
+)
 
 # Common non-canonical spellings -> canonical (mirrors detect_arch's map).
 ARCH_ALIASES = {
-    "amd64": "x86_64", "x64": "x86_64", "aarch64": "arm64",
+    "amd64": "x86_64",
+    "x64": "x86_64",
+    "aarch64": "arm64",
 }
 
 

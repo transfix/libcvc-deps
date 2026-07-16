@@ -23,11 +23,11 @@ from cvcpkg.server.app import _reject_noncanonical_platform_arch  # noqa: E402
         ("linux", "x86_64"),
         ("macos", "arm64"),
         ("windows", "x86_64"),
-        ("windows-gnu", "x86_64"),   # Phase-8 cross-toolchain target
+        ("windows-gnu", "x86_64"),  # Phase-8 cross-toolchain target
         ("dragonflybsd", "x86_64"),  # detect_platform already emits it
         ("wasm", "wasm32"),
-        ("any", "any"),              # platform-independent bundles
-        ("", ""),                    # back-compat: empty stays allowed
+        ("any", "any"),  # platform-independent bundles
+        ("", ""),  # back-compat: empty stays allowed
         ("freebsd", ""),
     ],
 )
