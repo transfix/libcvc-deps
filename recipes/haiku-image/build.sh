@@ -62,6 +62,11 @@ if [[ ! -e generated/build/BuildConfig && ! -e generated.x86_64/build/BuildConfi
 fi
 
 # ── 4. Build the custom anyboot image ───────────────────────────────────
+# The image build runs `git describe --tags` to stamp a revision; our
+# shallow clone has no tags, so it fails ("No names found"). Set the
+# revision explicitly (r1beta5 == hrev57937) — it is a cosmetic version
+# label baked into the image.
+export HAIKU_REVISION="${HAIKU_REVISION:-hrev57937}"
 jam -q -j"${JOBS}" @builder-anyboot
 
 ANYBOOT="$(ls -1 generated*/haiku-builder-anyboot.iso 2>/dev/null | head -1)"
