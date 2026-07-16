@@ -1,0 +1,35 @@
+# recipes/haiku-image/UserBuildConfig
+#
+# Copied into haiku/build/jam/UserBuildConfig by build.sh. Defines a
+# "builder-anyboot" jam build profile that produces a headless HaikuOS
+# builder image: a large disk, a build toolchain, OpenSSH, and a fixed
+# hostname. SSH keys and the first-boot script are injected afterward by
+# build.sh (via bfs_shell) so no secret material lives in this file.
+#
+# See: https://www.haiku-os.org/guides/building/userbuildconfig/
+
+# A 50 GB image so the builder has room for source trees + build output.
+# (The anyboot BFS partition cannot be grown after the fact.)
+HAIKU_IMAGE_SIZE = 51200 ;
+
+# Stable identity for the fleet.
+HAIKU_IMAGE_HOST_NAME = haiku-builder ;
+
+# Build toolchain + remote access baked into the image. openssh is already
+# in the default profile; the rest give a ready-to-build machine. If a
+# package name is not in the configured HaikuPorts repo the jam build fails
+# and names it — adjust here and rebuild.
+AddHaikuImageSystemPackages
+    openssh
+    openssl3
+    git
+    python3
+    bash
+    nano
+    ;
+
+# Development brings gcc/binutils/make/autotools; DevelopmentBase the headers.
+AddOptionalHaikuImagePackages
+    Development
+    DevelopmentBase
+    ;
