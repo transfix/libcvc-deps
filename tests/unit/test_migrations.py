@@ -32,16 +32,42 @@ _ROOT = Path(__file__).resolve().parents[2]
 _VERSIONS = _ROOT / "src" / "cvcpkg" / "migrations" / "versions"
 
 
-def _load_revisions() -> dict[str, str | None]:
-    """Return {revision: down_revision} for every migration module."""
-    revs: dict[str, str | None] = {}
+def _load_revision_records() -> list[tuple[str, str | None, str]]:
+    """Return (revision, down_revision, filename) for every migration module."""
+    records: list[tuple[str, str | None, str]] = []
     for f in sorted(_VERSIONS.glob("*.py")):
         spec = importlib.util.spec_from_file_location(f"_mig_{f.stem}", f)
         mod = importlib.util.module_from_spec(spec)
         assert spec and spec.loader
         spec.loader.exec_module(mod)
-        revs[mod.revision] = mod.down_revision
-    return revs
+        records.append((mod.revision, mod.down_revision, f.name))
+    return records
+
+
+def _load_revisions() -> dict[str, str | None]:
+    """Return {revision: down_revision} for every migration module.
+
+    Keyed by revision, so this cannot represent a collision — two files
+    claiming one revision collapse to a single entry.  test_no_duplicate_
+    revision_ids is what rules that out; this mapping assumes it.
+    """
+    return {rev: down for rev, down, _ in _load_revision_records()}
+
+
+def test_no_duplicate_revision_ids():
+    """No two migrations may claim the same revision.
+
+    A collision gives alembic two heads and breaks `alembic upgrade head` on
+    every backend, PostgreSQL included.  It is invisible to the head count in
+    test_single_head_linear_chain, whose dict keeps only the last file with a
+    given revision — which is how two 015s reached master on 2026-07-16.
+    """
+    by_rev: dict[str, list[str]] = {}
+    for rev, _down, name in _load_revision_records():
+        by_rev.setdefault(rev, []).append(name)
+
+    dupes = {rev: sorted(files) for rev, files in by_rev.items() if len(files) > 1}
+    assert not dupes, f"revision id claimed by more than one migration: {dupes}"
 
 
 def test_single_head_linear_chain():
