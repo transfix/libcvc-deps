@@ -7,6 +7,7 @@ and links to per-package detail pages.  Uses Bulma CSS for styling.
 
 from __future__ import annotations
 
+import functools
 import html as _html
 import json as _json
 import os
@@ -15,6 +16,36 @@ from cvcpkg import __version__
 
 _GITHUB_REPO = os.environ.get("CVCPKG_GITHUB_REPO", "transfix/libcvc-deps")
 _GITHUB_URL = f"https://github.com/{_GITHUB_REPO}"
+
+# CyberPC Angel, LLC gears logo — the project brand mark, served self-hosted
+# at /favicon.ico and /assets/cyberpc-angel-gears.png (see app.py).
+_BRAND_LOGO_PATH = "/assets/cyberpc-angel-gears.png"
+
+
+@functools.lru_cache(maxsize=1)
+def brand_logo_bytes() -> bytes:
+    """Return the bundled CyberPC Angel gears PNG, or ``b""`` if missing.
+
+    Read from package data so it ships in the wheel; cached after the first
+    read.  Returns empty bytes rather than raising so the site still renders
+    if the asset is somehow absent.
+    """
+    try:
+        from importlib.resources import files as _res_files
+
+        return (
+            _res_files("cvcpkg.server")
+            .joinpath("assets", "cyberpc-angel-gears.png")
+            .read_bytes()
+        )
+    except (FileNotFoundError, ModuleNotFoundError, OSError):
+        return b""
+
+
+# Absolute site origin, used to build absolute URLs for social-preview
+# (Open Graph / Twitter) image tags, which require a full URL.
+_SITE_URL = os.environ.get("CVCPKG_SITE_URL", "https://cvcpkg.org").rstrip("/")
+
 _SITE_TITLE = os.environ.get("CVCPKG_SITE_TITLE", "cvcpkg")
 _SITE_TAGLINE = os.environ.get("CVCPKG_SITE_TAGLINE", "Package Archive")
 _SITE_HERO = os.environ.get(
@@ -257,10 +288,18 @@ def _footer_html() -> str:
 
 
 def _head_html(title: str) -> str:
+    logo_url = f"{_SITE_URL}{_BRAND_LOGO_PATH}"
     return f"""<head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{title}</title>
+  <link rel="icon" type="image/png" href="{_BRAND_LOGO_PATH}" />
+  <link rel="apple-touch-icon" href="{_BRAND_LOGO_PATH}" />
+  <meta property="og:title" content="{title}" />
+  <meta property="og:type" content="website" />
+  <meta property="og:image" content="{logo_url}" />
+  <meta name="twitter:card" content="summary" />
+  <meta name="twitter:image" content="{logo_url}" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@1.0.4/css/bulma.min.css" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css"
         integrity="sha512-DTOQO9RWCH3ppGqcWaEA1BIZOC6xxalwEsw9c2QQeAIftl+Vegovlnee1c9QX4TctnWMn13TZye+giMm8e2LwA=="
