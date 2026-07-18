@@ -239,7 +239,7 @@ flowchart TD
 | 15 | CLI UX & the Recipe-First Workflow | ⬜ Planned — deprecate `cvc-requirements.yaml`, `~/.cvcpkg/` defaults (settings/recipes/build/install/cache), install-prefix registry (`~/.cvcpkg/local.db`) with aliases + delete/inspect/modify, per-prefix state DB (`share/cvcpkg/prefix.db`: installed-file tracking, **first-class `uninstall`**, idempotent installs, hash-verify, ops journal), recipe generation from existing projects, clean/activate commands, terminal graphics, offline source cache, recipe-set export + source pre-seeding for air-gapped self-hosting |
 | 16 | Prefix Provenance & Server Seeding | ⬜ Planned — install prefixes carry catalog info + recipes in `share/cvcpkg/` so a prefix can seed a cvcpkg-server; org/private status explicit with warnings |
 | 17 | Recipe Archives — Declared Artifacts & Package-Page UX | ⬜ Planned — schema-declared recipe artifacts, full recipe directories on the server, downloadable recipe archives, collapsible artifact viewer, package-list layout rework |
-| 18 | Server Backups & Restore | ⬜ Planned — first-class recipe/package backup + restore commands, admin-managed scheduled backup jobs to the storage backends |
+| 18 | Server Backups, Scheduled Jobs & Quota Governance | ⬜ Planned — recipe/package backup + restore; a general admin job manager + scheduler (none exists today); quota governance (global default → infinite, reconciliation job, recipes count against org quota) |
 | 19 | Application Packaging & Desktop Delivery | ⬜ Planned — recipe entry points, desktop assets, exe/MSI + AppImage + dmg installer commands from a prefix, `cvcpkg bake` self-mounting prefix binaries (feasibility: native per-OS mechanisms + persistent state layers + cosmo APE variant, no Docker) |
 | 20 | First-Party & Featured Software Recipes | ⬜ Planned — org namespaces `cypca` (eiskaltdcpp, eiskaltdcpp-py, verlihub), `cvc` (TexMol alongside libcvc/volrover), `tfx` (ezquake); SDL2/SDL3 across platforms + satellites; the wheel recipes needed to self-host cvcpkg |
 | 21 | Package Visibility — Hidden Packages | ⬜ Planned — discoverability-only suppression (a third axis beside `yanked` and org `is_private`); upstream is authoritative; propagation through mirror + populate |
@@ -1601,6 +1601,48 @@ package page.
       recipe directory** usable with the normal cvcpkg commands to build,
       install, and publish packages.
 
+#### Recipe storage accounting & publish governance
+
+**Current state (audited 2026-07-18).**  When a recipe is pushed to
+*announce* a package before it is built, the server **does** store the
+full recipe directory — `recipe.yaml` plus all scripts, patches, and any
+media present — as one `tar.gz` under
+`state_dir/recipe_bundles/[org]/<name>.tar.gz`.  But three things are
+missing, and they matter for private-org fairness and abuse resistance:
+
+- [ ] **Recipe bundles must count against the organization's storage
+      quota.**  Today recipe uploads count against **nothing** — the
+      per-org `storage_used_bytes` quota (default 10 GiB) and the global
+      cap are **package-only**; `upload_recipe` never calls
+      `check_storage_limit`.  A private org can therefore stage unlimited
+      recipe bytes for free.  Count org-scoped recipe bundles against the
+      org quota; **global/base recipes (an admin concern — see below) stay
+      exempt.**
+- [ ] **Gate global/base recipe publishing to admins.**  The premise that
+      a global recipe is "published by an admin" is **not currently
+      enforced** — `upload_recipe` requires only a `publisher` token, and
+      the admin/org-member check is **skipped entirely when `org_slug` is
+      empty**, so any publisher can push *or silently overwrite* a global
+      base recipe.  Require admin for the public namespace (matching
+      `DELETE /v1/recipes/{name}` and the register-placeholder endpoint,
+      which already do), so the exemption above is safe and the public
+      recipe set is admin-curated.
+- [ ] **A recipe-upload size cap.**  `upload_recipe` reads the entire body
+      into memory with **no `MAX_UPLOAD_BYTES` check** (unlike the
+      chunked, capped package-upload path) and there is no body-size
+      middleware — a recipe bundle can be arbitrarily large.  Add a cap and
+      stream to disk.
+- [ ] **Route recipe bundles through the pluggable storage backend.**
+      Recipe bundles are written directly to the server's local filesystem
+      and **bypass** the `StorageBackend` layer that package archives use,
+      so they cannot live on `s3://`/`gcs://`/etc. and are not covered by
+      the Phase 18 backups' backend targets.  Route them through the same
+      backend abstraction.
+
+> These compose with the **quota-reconciliation job** and the
+> **default-infinite global quota** in Phase 18 — recipe accounting is
+> only trustworthy once a job reconciles the materialized counters.
+
 #### Package-page recipe section
 
 - [ ] **Show the declared artifacts alongside the recipe** — in the recipe
@@ -1626,9 +1668,15 @@ package page.
 
 ---
 
-### Phase 18 — Server Backups & Restore
+### Phase 18 — Server Backups, Scheduled Jobs & Quota Governance
 
 **Status: Planned — required before the v2.0.0 PyPI release**
+
+Three related operator concerns: restorable backups, a way for admins to
+*manage and schedule* server jobs (which the scheduled backup needs and
+which does not exist today), and honest storage quotas.
+
+#### Backups & restore
 
 `cvcpkg server backup` today is a database dump.  Before 2.0.0 the server
 needs **first-class, restorable** backups of the things that actually matter:
@@ -1650,6 +1698,55 @@ the recipes and the packages.
       that handles regular backups to **various backend types** — reusing
       the Phase 5 storage-backend layer (`s3`, `gcs`, `azure`, `sftp`,
       `rsync`, `rclone`, `file`, `gh-release`) for offsite destinations.
+
+#### General admin job manager & scheduler
+
+**Current state (audited 2026-07-18): there is no general job scheduler.**
+All periodic server work — mirror sync, populate sync, mirror health,
+log/yank retention GC, build dispatch — is a set of **hardcoded
+fixed-interval `asyncio` loops** in the app lifespan, tunable only by env
+vars and **not addressable, pausable, or rescheduleable** at runtime.  The
+only *manageable* jobs are **build jobs** (submit/list/cancel/pause/resume,
+per-org scoped); there is no cron/`ScheduledJob`/job-queue abstraction, and
+the `/admin` dashboard's job surface is **view-only** (the Health tab shows
+counts and a builder table with no controls).  The scheduled backup above
+has nowhere to live.  This phase builds the missing substrate:
+
+- [ ] **A scheduled-task abstraction** — a jobs-with-schedule table + a
+      scheduler that runs registered jobs at admin-configured times/
+      intervals (backups, quota reconciliation, retention GC, populate/
+      mirror sync all become *registered jobs* instead of hardcoded loops).
+- [ ] **An admin job manager** — API + `/admin` dashboard + CLI to **list,
+      pause, resume, reschedule, trigger-now, and cancel** scheduled jobs
+      and view their run history/last-status, extending management beyond
+      build jobs to all server-internal work.  Every job action is
+      audit-logged (composes with Phase 23's forensic journal).
+- [ ] **Surface existing jobs** — bring the current hardcoded loops under
+      the manager as read-at-minimum (next-run, last-run, interval) so
+      operators can see and adjust them without redeploying.
+
+#### Quota governance
+
+**Current state (audited 2026-07-18): quotas exist but are incomplete.**
+There is a **per-org** quota (`storage_used_bytes` vs `storage_limit_bytes`,
+default 10 GiB) and a **global** cap
+(`CVCPKG_GLOBAL_CACHE_STORAGE_LIMIT_BYTES`) — but the global default is
+**100 GiB, not infinite**, the org counter is a materialized value that can
+**drift** (mutated incrementally on publish/delete/yank with no
+reconciliation), and neither counts recipe bundles (see Phase 17).
+
+- [ ] **Default the global quota to infinite.**  Keep the knob, but change
+      the default from 100 GiB to **unlimited (0 = infinite)** so a
+      self-hosted server does not silently reject publishes at 100 GiB;
+      operators opt *in* to a cap.
+- [ ] **Quota-reconciliation job** — a scheduled job (using the manager
+      above) that recomputes each org's `storage_used_bytes` from the true
+      `SUM(size_bytes)` — including recipe bundles once Phase 17 counts them
+      — so the materialized counter cannot drift from reality.
+- [ ] **Quota admin UI** — surface and edit the global and per-org limits
+      (and current usage) in the `/admin` dashboard; today they are only
+      reachable via the JSON API (`PATCH /v1/admin/settings`,
+      `PATCH /v1/orgs/{slug}`).
 
 ---
 
