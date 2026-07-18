@@ -19,13 +19,13 @@ project going forward.
 - The GitHub repository will be renamed **`transfix/libcvc-deps` →
   `<cyberpcangel-org>/cvcpkg`** *before* the first PyPI publish — the rename
   now also moves the repo into the new CyberPC Angel org (see the Ownership
-  section above and Phase 24).
+  section above and Phase 25).
 - Backward compatibility is retained where downstream consumers depend on
   the old name — e.g. the `libcvc-depsConfig.cmake` compatibility wrapper
   stays so existing `find_package(libcvc-deps)` calls keep working.
 
 > **Release ordering:** the PyPI publish is the **final phase of the entire
-> roadmap** (Phase 24), not an early milestone.  It happens only after the
+> roadmap** (Phase 25), not an early milestone.  It happens only after the
 > rename (project + repo), the trusted publisher is configured, and **every
 > other roadmap phase — including the pre-release hardening phases 12–14 and
 > the v2.0.0 product phases 15–19 — is closed**.  Publishing to PyPI claims a
@@ -39,7 +39,7 @@ project going forward.
 work was 100% funded by the CyberPC Angel team, and CyberPC Angel, LLC owns
 the intellectual property.  All copyright and provenance branding across the
 project is being set to **CyberPC Angel, LLC**.  This effort is sequenced
-alongside the rename and the org move below, and lands **before** the Phase 24
+alongside the rename and the org move below, and lands **before** the Phase 25
 PyPI publish so the first public release carries the correct ownership.
 
 - [ ] **Copyright & provenance branding sweep → CyberPC Angel, LLC.**  Set
@@ -75,7 +75,7 @@ PyPI publish so the first public release carries the correct ownership.
 - [ ] **New GitHub organization for the CyberPC Angel team; cvcpkg lives
       under it.**  Create a dedicated **CyberPC Angel** GitHub org (slug TBD,
       e.g. `cyberpcangel`) and move cvcpkg into it.  This **changes the
-      Phase 24 rename target and the PyPI trusted-publisher owner** from
+      Phase 25 rename target and the PyPI trusted-publisher owner** from
       `transfix` to the new org, the `_GITHUB_REPO` default
       (`transfix/libcvc-deps`, env-overridable via `CVCPKG_GITHUB_REPO`), and
       all `transfix/libcvc-deps` URL references (**~53 occurrences across ~20
@@ -245,12 +245,13 @@ flowchart TD
 | 21 | Package Visibility — Hidden Packages | ⬜ Planned — discoverability-only suppression (a third axis beside `yanked` and org `is_private`); upstream is authoritative; propagation through mirror + populate |
 | 22 | Federation Topology — Nested Authority & Network Introspection | ⬜ Planned — N-tier edge→mid→root authority, cross-tier consistency warnings, same-org override, permission-gated network statistics |
 | 23 | Build & Configuration-Management System | ⬜ Planned — recipes as state (Get/Test/Set, `check`/`apply`/`uninstall`), BYO non-redistributable assets, security (config-channel-is-C2), tamper-evident local forensic journal, per-machine generations |
-| 24 | **PyPI Release** | ⬜ **Final phase** — the project/repo rename, trusted-publisher config, and the gated publish. Deliberately last: `pip install cvcpkg` ships only after the roadmap is otherwise complete. |
+| 24 | Live Updates, Activity Feed & Build Transparency | ⬜ Planned — client WebSocket push + new-package notifications, a public visibility-filtered activity feed (recipes/builds/yanks/unyanks/nukes), public read for public build jobs+logs (private orgs stay private) |
+| 25 | **PyPI Release** | ⬜ **Final phase** — the project/repo rename, trusted-publisher config, and the gated publish. Deliberately last: `pip install cvcpkg` ships only after the roadmap is otherwise complete. |
 
 **Road to PyPI (`pip install cvcpkg`):** the PyPI publish is the **last phase of the
-roadmap** (Phase 24), not an early step.  The *engineering* readiness for it (Phase 1.5)
+roadmap** (Phase 25), not an early step.  The *engineering* readiness for it (Phase 1.5)
 is done, but the release itself happens only after the remaining phases — including the
-pre-release hardening phases (12–14) and the v2.0.0 product phases (15–23) — are
+pre-release hardening phases (12–14) and the v2.0.0 product phases (15–24) — are
 closed.  This is a deliberate correction: publishing to PyPI is a one-way,
 name-claiming, community-facing commitment, so it comes at the very end.
 
@@ -296,7 +297,7 @@ work before a `pip install cvcpkg` is even buildable.  All of these are done
 hardening pass — private-data isolation, tenant scoping, tar-slip and
 reflected-XSS fixes).
 
-> **The actual PyPI publish is not here.**  It moved to **Phase 24 — PyPI
+> **The actual PyPI publish is not here.**  It moved to **Phase 25 — PyPI
 > Release**, the final phase of the roadmap.  The rename (project + repo),
 > trusted-publisher configuration, and the gated publish all happen there,
 > after every other phase is closed.  See the release-ordering note at the top
@@ -315,7 +316,7 @@ reflected-XSS fixes).
       installed wheel
 - [x] Publish workflow (`cvcpkg-publish.yml`) wired for PyPI trusted
       publishing (OIDC), gated behind the `CVCPKG_PUBLISH_TO_PYPI` repo
-      variable so a stable tag cannot publish until Phase 24 flips it on
+      variable so a stable tag cannot publish until Phase 25 flips it on
 
 #### Admin CLI Completeness
 
@@ -2921,7 +2922,88 @@ explicitly.**
 
 ---
 
-### Phase 24 — PyPI Release (Final Phase)
+### Phase 24 — Live Updates, Activity Feed & Build Transparency
+
+**Status: Planned — required before the PyPI release**
+
+Give users a **real-time view of the archive**: WebSocket push for new
+packages and notifications, a **live activity feed** of site events (new
+recipes, published builds, yanks / unyanks / nukes), and public visibility
+into how public packages are built — while keeping private organizations'
+builders and build logs strictly private.  Especially useful when a flood
+of packages is expected and users want to watch them land.
+
+**Current state (audited 2026-07-18).**  The SPA is **poll-based**
+(`setInterval` refreshes builders every 30s, jobs every 15s) with no client
+real-time.  The **only** WebSocket is builder-facing
+(`/v1/builders/{id}/ws`); the **only** client-facing stream is the
+per-build-log SSE (`/v1/builds/{id}/log/stream`), and it is
+publisher/admin-gated.  The **audit log already records the full event
+vocabulary** wanted here (`publish, yank, unyank, delete, nuke,
+recipe_upload, build_*`) — but `GET /v1/audit` is **admin-only**, and
+yank/unyank/nuke currently emit **no** event at all (only an audit row;
+today only `package.published` and the build/builder lifecycle fan out via
+the outbound webhook bus).
+
+#### Live updates & notifications
+
+- [ ] **A client-facing real-time channel** — a browser/CLI-facing
+      WebSocket (or SSE) carrying catalog events, net-new: the existing
+      builder WebSocket and the `emit_webhook_event` outbound bus are
+      server↔infra only and carry no client subscribers.  Reuse that
+      plumbing rather than inventing a parallel one.
+- [ ] **New-package push + notifications** — push `package.published`
+      (already emitted to webhooks) to subscribed clients as an in-page
+      notification; a live counter/toast when new packages land.
+- [ ] **User subscriptions** — "notify me on a new version of X / new
+      packages in org Y."  No user-facing subscribe/notify primitive exists
+      today (the only subscription is the admin-managed, org-scoped
+      server-to-server webhook); this is the per-user layer on top.
+
+#### Live activity feed
+
+- [ ] **Emit events for the whole lifecycle** — yank, unyank, nuke, and
+      recipe upload currently write only an audit row and fan out nothing.
+      Emit them (as webhook/bus events) so they can reach the feed.
+- [ ] **A public, filtered activity feed** — a live projection of the audit
+      stream (new recipes, published builds, yanks/unyanks/nukes) that the
+      SPA renders as a scrolling feed.  It must be a **visibility-filtered
+      public projection**, not the admin-only `GET /v1/audit`: exclude
+      private-org and hidden-package (Phase 21) events for unauthorized
+      viewers, exactly as `/v1/feed.xml` already excludes yanked/private
+      packages.  Extends that RSS feed (latest *published packages* only)
+      to the full event stream.
+
+#### Build transparency — public sausage-making, private stays private
+
+The org-privacy dimension is **already enforced** for builders (public and
+no-org builders are visible to everyone via `optional_reader_auth`;
+private-org builders 404 for non-members — implemented and covered by
+`test_builder_public_access.py`).  The gap is on the **build-job and
+build-log side**, which are publisher/admin-only with **no public read
+path even for public builds**:
+
+- [ ] **Make public build jobs and logs publicly readable** — add
+      `optional_reader_auth`-style public read to `GET /v1/builds`,
+      `/v1/builds/{id}`, `/v1/builds/{id}/log`, and the log SSE stream for
+      **public / no-org builds**, mirroring what `/v1/builders` already
+      does.  Let anyone watch how the public packages are built (logs and
+      all) — "see how the sausage is made."
+- [ ] **Keep private builders and logs strictly private** — preserve the
+      existing `_assert_build_visible` / `_assert_dag_visible` org checks so
+      **only authorized org members (or admins) can read a private org's
+      build logs, jobs, or builder details**; unauthorized callers get 404,
+      never a leak.  (Privacy is org-derived via `OrganizationRow.is_private`
+      today; no per-object visibility flag is needed unless a finer grain is
+      wanted later.)
+- [ ] **Close the test gap** — there is a public/private access test for
+      *builders* but **none for build jobs or logs**; add the parallel
+      suite asserting anonymous/reader can read public build logs and are
+      404'd on private-org ones, and that members/admins can.
+
+---
+
+### Phase 25 — PyPI Release (Final Phase)
 
 **Status: Blocked on all prior phases — deliberately last**
 
@@ -3069,7 +3151,7 @@ The project has been restructured for the **cvcpkg** identity:
 - [ ] **Owning entity = CyberPC Angel, LLC** — copyright/provenance branding,
   source headers, gears logo, and the org move (Ownership section)
 - [ ] **PyPI publication** — `pip install cvcpkg` (the final roadmap phase;
-  see Phase 24)
+  see Phase 25)
 
 ---
 
