@@ -1771,6 +1771,68 @@ travel *inside* the bake — and its private-org warning applies to baking
 one), and Phase 15's air-gap story (a bake is its logical endpoint: one
 file, no network, no unpack).
 
+#### Code signing — official CyberPC Angel, LLC binaries
+
+Every installer and bake above should eventually ship **signed as CyberPC
+Angel, LLC**, so our builds are verifiably official.  Researched
+2026-07-18 — the landscape moved recently, and two common assumptions
+need correcting up front:
+
+> **You don't buy a "Microsoft license" or an "Apple license" for this.**
+> Windows Authenticode certificates come from commercial CAs (DigiCert,
+> Sectigo, SSL.com, GlobalSign…), not Microsoft — though Microsoft *now
+> sells a signing service* (below) that is the best fit for us.  Apple's
+> is a **$99/yr Developer Program membership** plus a Developer ID
+> certificate, not a per-product license.
+>
+> **EV certificates no longer buy SmartScreen reputation.**  Microsoft
+> removed the EV fast-track in 2024 and its docs now say paying an EV
+> premium "solely to avoid SmartScreen warnings is no longer justified" —
+> OV and EV are treated identically, and reputation accrues organically
+> from clean-install volume for both.  Ignore any vendor page still
+> claiming "instant SmartScreen bypass"; do not buy EV.
+
+- [ ] **Windows — Azure Artifact Signing (~$120/yr), signed from Linux
+      CI.**  Microsoft's signing service (GA Jan 2026, $9.99/mo Basic,
+      5,000 signatures/mo): a US LLC qualifies, the old 3-year org-age
+      rule is gone, no USB token or HSM to manage.  Certs are 72-hour
+      short-lived, so **RFC 3161 timestamping is mandatory**, and
+      **`jsign`** is the only client that reaches it from Linux — which
+      suits the builder fleet.  Fallback path: SSL.com OV + eSigner
+      (~$309/yr).  Context on why cloud signing: since June 2023 all
+      code-signing keys must live in FIPS-140-2-L2 hardware (the
+      downloadable `.pfx` is dead), and since March 2026 certs max out at
+      ~15 months — cloud signing sidesteps the token-reship treadmill.
+- [ ] **macOS — Apple Developer Program (org) + notarization.**
+      Enrollment needs a **D-U-N-S number** (free, ~week) and the real
+      legal entity; then a **Developer ID Application** cert (plus
+      Developer ID *Installer* for `.pkg`).  Pipeline: `codesign
+      --options runtime --timestamp` → `notarytool` submit (`altool` is
+      dead) → `stapler staple`.  **Notarization is effectively mandatory
+      now** — macOS 15 removed the Control-click bypass, leaving
+      unnotarized apps behind an admin-password wall.  Signing/stapling
+      needs a macOS runner (the fleet's mac builders); `rcodesign` is a
+      viable Linux-native secondary, not the primary.  For dmg:
+      sign+notarize+**staple the app first**, then build/sign/notarize/
+      staple the dmg.  Universal binaries: `lipo` first, sign the fat
+      binary.
+- [ ] **Linux — GPG + checksums; cosign for provenance.**  No OS trust
+      authority exists to pay; ship detached GPG signatures + SHA256SUMS
+      on release artifacts, sign apt/rpm repos if we publish them, and
+      add **sigstore/cosign** attestations in CI for supply-chain
+      provenance (valuable to automated consumers, invisible to desktop
+      users; AppImage's own signature field is effectively decorative).
+      Composes with cvcpkg's existing Ed25519 package signing.
+- [ ] **Order of operations** — Windows first (worst unsigned UX, cheapest
+      fix, reputation takes weeks to accrue so start early), macOS second
+      (longer enrollment lead time), Linux continuous/cheap.  Realistic
+      floor: **~$220/yr** in program fees plus macOS CI capacity.
+- [ ] **Pitfalls to design in from day one** — timestamp *everything* (an
+      untimestamped signature dies with its cert, retroactively, on every
+      user's disk); expect a SmartScreen **reputation reset on any cert
+      change** (renew early, overlap, keep one consistent signing
+      identity); make notarization CI steps retryable (no SLA).
+
 ---
 
 ### Phase 20 — First-Party & Featured Software Recipes
@@ -1870,11 +1932,10 @@ to install *itself*.
       Windows, Linux, macOS, and BSD, with mingw cross presets.  Note it
       vendors `src/qwprot` as a **submodule** — the recipe must fetch it
       recursively or vendor it.
-      *Source decision:* the `transfix/ezquake-source` fork currently has
-      **zero divergence from upstream** (0 ahead / 153 behind; its `master`
-      HEAD SHA exists in `QW-Group/ezquake-source`), so the recipe should
-      track **upstream** unless the separate `hybrid-race-condition` branch
-      is the intended source.
+      *Source: **upstream `QW-Group/ezquake-source`** — decided.*  The
+      maintainer's earlier changes were merged upstream, and the
+      `transfix/ezquake-source` fork carries no remaining divergence
+      (0 ahead / 153 behind), so the recipe tracks upstream directly.
 - [ ] **Org page links to the maintainer's GitHub profile** — extends the
       organization page with an optional profile/website link field.
 
@@ -1905,6 +1966,259 @@ the fleet.
       are unrelated numbers), and each drags its own codec tree
       (png/jpeg/tiff/webp/avif; ogg/vorbis/opus/flac/mpg123; freetype/
       harfbuzz) — so budget one item each, not a single "satellites" line.
+
+#### Quake engines & tooling
+
+SDL's first real payoff: a family of GPL-2.0 engines and tools that share
+the SDL/codec dependency stack already being built above.  These are
+upstream open-source projects, so they land in the **public namespace**
+(unlike `ezquake`, which stays in `tfx` as a personal build); moving any of
+them under an org later is a one-line change.
+
+> **Policy: build from source, do not repackage upstream binaries.**
+> Every engine here publishes prebuilt binaries, and it would be tempting
+> to stage them as `prebuilt` recipes.  Don't — build each from source
+> against cvcpkg's own dependency closure.  This is the whole point of the
+> archive (reproducibility, a known dependency graph, cross-platform
+> coverage the upstreams don't offer, and CVE-patchable deps), and it is
+> what makes the binaries *ours* to sign (see **Code signing** in
+> Phase 19).  It also avoids inheriting upstream's vendored-static habits:
+> QuakeSpasm ships statically-linked libjpeg/zlib/png/ogg/vorbis/opus/mad,
+> and FTE's `make makelibs` downloads and builds its own copies of the same
+> libraries — both of which defeat a shared, auditable dependency graph.
+> `prebuilt` staging stays reserved for genuinely non-redistributable or
+> non-buildable artifacts (vendor SDKs, NVIDIA redistributables).
+
+- [ ] **`fteqw`** — the FTE QuakeWorld engine (GPL-2.0).  Supports **both
+      SDL2 and SDL3**; on Linux the default build uses the native
+      X11/Wayland path with `DYNAMIC_SDL`, i.e. **SDL is `dlopen`'d rather
+      than linked** — the same portability property SDL itself has.
+      Optional deps (CMake warns and continues): `zlib`, `bzip2`,
+      `libjpeg-turbo`, `libpng`, `freetype` + `fontconfig`, vorbisfile,
+      `gnutls`, OpenGL, draco.  Vulkan is **headers-only** (loader
+      `dlopen`'d) and OpenAL is runtime-loaded.  **Note: libcurl is *not* a
+      dependency** — FTE ships its own HTTP stack; don't add it.
+      *Landmines:* (1) **`make makelibs` downloads source tarballs over the
+      network at build time** (ijg.org, zlib.net, xiph.org, SourceForge,
+      GitHub, libsdl.org…) — a hermetic recipe must **skip `makelibs`
+      entirely** and build against cvcpkg deps.  (2) Two build systems:
+      Make is the tested/blessed path but must run from `engine/`, while
+      `CMakeLists.txt` sits at the repo root.  (3) Renderer variants
+      (`gl-rel`, `vk-rel`, `d3d-rel`, `mingl-rel`) are build *flavors* that
+      produce the same binary name — shipping GL and Vulkan side by side
+      needs separate build dirs or renaming.  (4) The `ffmpeg` plugin is
+      pinned to **ffmpeg 4.x** and will not build against modern ffmpeg.
+      *Source caveat:* `github.com/fte-team/fteqw` self-describes as a
+      **mirror** (origin was SourceForge SVN; a Forgejo instance may be the
+      live upstream — the site served binaries newer than the mirror), so
+      **pin a commit SHA** rather than tracking a branch.
+- [ ] **`fteqcc`** — the FTE QuakeC compiler, built from the **same repo**
+      (`engine/qclib/`, targets `qcc-rel`/`qccgui-rel`); there is no
+      separate upstream repo.  The CLI is essentially freestanding C
+      (optional zlib).  Worth its own recipe beyond QuakeC: **`fteqcc`
+      doubles as a pak/pk3 creator and extractor** (`-l`/`-x`/`-0`/`-9`),
+      making it a genuinely useful standalone archive tool.
+      `fteqccgui` is a separate matter — on non-Windows it needs **Qt5
+      Widgets + QScintilla**, and the Make path *regenerates* Scintilla
+      lexers via `python LexGen.py` (build-time code generation), so treat
+      the GUI as an optional variant, not the default.
+- [ ] **Other FTE tools as separate recipes** — `fteqw-sv` (dedicated
+      server; **no GL/SDL deps, the cleanest recipe of the set**),
+      `fteqw-cl` (client-only), `iqmtool` (model converter: smd/gltf/glb/
+      iqe/md5/fbx/obj → IQM/VVM/MDL), `imgtool` (texture/WAD/cubemap
+      conversion + compression), `qtv` (QuakeTV relay — **ships its own
+      LICENSE file**, verify separately), `ftemaster`, `httpserver`,
+      `qcvm`, and `q3asm2` (QVM assembler; Make-only, absent from the CMake
+      targets).
+- [ ] **`qss-m`** — **QSS-M (QuakeSpasm Spiked Multiplayer)**, the client
+      the maintainer asked for (`github.com/timbergeron/QSS-M`,
+      `qssm.quakeone.com`, GPL-2.0).  Lineage: Quake 1.09 → FitzQuake →
+      QuakeSpasm → QuakeSpasm-Spiked → QSS-M; it is the **most actively
+      maintained** of that line.  Makefile build (`build-linux.sh` →
+      `QSS-M-l64`; macOS universal `.app`; MSYS2 on Windows).  Unlike
+      FTEQW, **libcurl and GnuTLS are genuine dependencies here**, along
+      with SDL2, `libmad`, `opus`/`opusfile`, `vorbis`, `zlib`.  Note the
+      required `-Wl,--allow-multiple-definition` link flag on modern GCC.
+- [ ] **`quakespasm-spiked` (QSS)** and **`quakespasm`** — optional
+      companions to QSS-M.  QSS (`Shpoike/Quakespasm`, GPL-2.0) is Spike's
+      fork and the bridge to the FTE codebase, but is less active.  Plain
+      QuakeSpasm's canonical home is **SourceForge** with
+      `github.com/sezero/quakespasm` as the official mirror — avoid the
+      archived `ericwa/Quakespasm`.  *Gotcha:* upstream QuakeSpasm defaults
+      to **SDL-1.2** unless `USE_SDL2=1`; QSS and QSS-M default to SDL2.
+      **Set the SDL major explicitly in every recipe.**  Upstream ships
+      statically-linked binaries, so expect friction building fully-shared.
+- [ ] **`darkplaces`** — LadyHavoc's engine (GPL-2.0), the base for several
+      standalone games.  Track **`DarkPlacesEngine/darkplaces`** on GitHub
+      (its README states the Git repo officially replaces the old SVN).
+      *Note:* `hemebond.gitlab.io/darkplaces-www` is a **rebuild of the
+      classic project website**, not a fork — useful as documentation, not
+      as a source to track.  Makefile build (`make sdl-release`); a VS2019
+      solution exists but upstream does not recommend it.
+      Deps are **narrower than folklore suggests**: client needs
+      `libjpeg-turbo` + **SDL2 ≥ 2.0.18** (≥ 2.24.0 on Windows), with
+      `libcurl`, `libpng`, `freetype`, vorbisfile optional; the
+      **dedicated server needs only libjpeg + zlib and no SDL at all** —
+      so ship two targets from one source.  Audio goes through SDL2, so
+      there is no direct ALSA/OSS dependency, and `libd0_blind_id` /
+      `libtheora` are *not* deps (those are Xonotic-side concerns).
+- [ ] **Companion engines (optional)** — `vkquake` (Vulkan, the most active
+      of the family) and `ironwail` (performance-focused QuakeSpasm fork);
+      both GPL-2.0.
+
+#### Quake servers, proxies & server mods
+
+All GPL-licensed and self-contained — a clean, high-value cluster.
+
+- [ ] **`mvdsv`** — the standard QuakeWorld server (GPL-2.0, CMake,
+      **no external dependencies**).  Pin **`QW-Group/mvdsv`**:
+      `deurk/mvdsv` is a rename-redirect to it, not a separate fork.
+- [ ] **`qwfwd`** — the maintained QuakeWorld server **proxy**
+      (`QW-Group/qwfwd`, GPL-2.0, CMake, no declared deps).
+- [ ] **`fteqw-sv`** — FTE's dedicated server (see above); covers both
+      NetQuake and QuakeWorld protocols, and is the dependency target for
+      `crmod7` below.
+- [ ] **`ktx`** — the competitive QuakeWorld mod (`QW-Group/ktx`,
+      GPL-2.0).  **Recipe-shape warning: KTX is a native C shared library
+      (`qwprogs.so` / `.dll`), *not* compiled QuakeC** — it builds with
+      CMake + gcc/clang and **does not use fteqcc**.  Runtime dependency on
+      `mvdsv`.  An alternate **QVM** target exists (`build_cmake.sh
+      linux-amd64 qvm`) whose toolchain upstream does not document —
+      default the recipe to the native `.so` and treat QVM as an optional
+      variant.
+- [ ] **`crmod7`** — the CRx / CRMod line (**`quakeone/CRMod7`**,
+      GPL-3.0).  Note both `quakeone/CRx` and `quakeone/crmod-plus` are
+      **rename-redirects to `CRMod7`** — pin the real name.  This is the
+      **opposite recipe shape from KTX**: it is QuakeC compiled with
+      **`fteqcc`** into `progs.dat` (+ optional `csprogs.dat`), which makes
+      it the first real consumer of the `fteqcc` recipe above.  It is a
+      **NetQuake** mod and **requires FTE extensions — it must run on
+      `qss-m` or `fteqw-sv`**, a hard dependency edge.  Actively developed
+      but has **no tagged releases**, so pin a commit.
+      *Legacy note:* `jp-grossman/crmod` (the original ClanRing CRMod++ —
+      "CR" = **ClanRing**) ships a GPL-3.0 `LICENSE.txt` today, but its
+      historical distribution readme carried a bare "Copyright 2000, Idle
+      Communications, Inc." with no grant.  It is also MSVC/qccx
+      toolchain-bound and stale since 2021 — **package CRMod7, not the
+      legacy tree**, and don't treat the older provenance as settled.
+- [ ] **`fortressone`** — ⚠️ **licensing blocker, engine-only for now.**
+      FortressOne is a standalone QuakeWorld Team Fortress distribution
+      that **ships FTE**; the engine side is fine (upstream FTE is
+      GPL-2.0).  But `FortressOne/server-qwprogs` (the TF mod),
+      `FortressOne/fteqw-code`, the installers, and `oztf` all carry
+      **no LICENSE file at all** (API reports `null`), and the mod
+      descends from TF 2.9, whose original licensing was never
+      free-software.  Only `qwtf-discord-bot` (MIT) is cleanly licensed.
+      Package the engine; **do not assert a license for the mod** — that
+      needs an upstream conversation before it can ship.
+- [ ] ~~**Attackers Go Red** (attackersgored.com)~~ — **not packageable.**
+      It is a real Quake 1 / QuakeWorld CustomTF "O vs D" mod with a
+      long-running community, but the site publishes **no source and no
+      license** (it is a WordPress/phpBB community presence, with files
+      routed via email).  The packageable substrate is the engine plus a
+      generic CustomTF progs, not AGR itself.
+- [ ] ~~**nQuake**~~ — **not a compile target.**  nQuake is a
+      downloader/installer that assembles shareware Quake + ezQuake +
+      textures + configs + bots.  Packaging it would mean reimplementing
+      its distfile assembly *and* inherit the shareware problem below.
+      Package `ezquake` + assets directly instead.
+
+#### Game content — a redistribution tier model
+
+Engines are GPL-2.0 and carry **no legal friction**.  Game *content* is a
+different problem, and the naïve version of "package public Quake map
+collections" is not safely executable.  Researched 2026-07-18; **not legal
+advice**, and the Tier B conditions below are worth a short consult before
+hosting bytes.
+
+> **The critical architectural point.**  A `source.url` + `sha256` recipe
+> does **not** by itself avoid redistribution.  cvcpkg is a *binary*
+> archive: the normal flow is recipe → build → **publish the built artifact**.
+> For source code the build transforms input into output; **for game data
+> there is no transformation** — the "build" is repackaging, so the
+> published artifact contains the original copyrighted bytes verbatim and
+> the archive is redistributing them.  Protection only exists when the
+> archive hosts **only the recipe** and the *client* fetches the payload at
+> install time.
+
+- [ ] **`redistributable: false` recipe flag (highest-value item here).**
+      A per-recipe flag that **hard-blocks binary publication** and forces
+      the install-time-fetch path.  Without it, a maintainer running the
+      normal publish pipeline silently turns a lawful recipe into an
+      infringing archive artifact.  Direct precedents: **Flathub's
+      `extra-data`** source type (uri + checksum + size, fetched from the
+      publisher at install; Flathub *requires* it for non-redistributable
+      sources) and **Debian's `game-data-packager`**, which ships no data
+      and assembles packages on the user's machine.
+
+**Tier A — safe to host outright.**  `librequake` (BSD-3-Clause art +
+GPL-2.0 QuakeC; actively maintained, still beta — note it has **no root
+LICENSE file**, so automated detection reports `NOASSERTION` and the
+licences must be asserted by hand), `spirit-quake-maps-gpl` (GPL-2.0
+`.map` sources), and every engine above.  **Start here** — this is the
+part of the plan with no legal friction.
+
+**Tier B — host only as the byte-identical original archive.**  Arcane
+Dimensions, Copper, Alkaline, and Underdark Overbright each carry an
+**explicit** electronic-redistribution grant in their readme — but all are
+conditioned on *unaltered*, *no charge to the recipient*, and *readme
+included*.  That condition is a trap for a package manager: recompressing
+into our own format, installing a file subset, or stripping docs
+**breaches the very licence being relied on**.  Copper goes further and
+explicitly forbids repackaging its `progs.dat`/assets alongside maps, which
+rules out convenience bundles.  Given how tight this is, Tier B is a good
+candidate for the fetch-at-install path *even though* hosting is arguably
+permitted.
+
+**Tier C — fetch-at-install or user-supplied only; never host.**
+Retail `pak0.pak`/`pak1.pak` and the mission packs must come from the
+user's own Steam/GOG/CD install — detect, verify by sha256, never fetch,
+never host (the `game-data-packager` model).  The 2021 Nightdive
+re-release content (`QuakeEX.kpf`, Dimension of the Machine) is under the
+ZeniMax EULA — user-supplied only.
+**Shareware `pak0.pak` belongs here too, and is weaker than its
+reputation** — see the note below.
+
+**Tier D — avoid entirely.**  **Dwell** is not merely unlicensed: its own
+readme credits assets *"ripped"* from Serious Sam (Croteam), plus Raven,
+Digital Extremes, and Lobotomy content — affirmatively contaminated, and
+its compiled Copper-derived `progs.dat` raises a separate GPL-2.0
+source-availability question.  **Quake Epsilon** aggregates dozens of packs
+with individually unverified terms plus a repackaged shareware `pak0`; the
+maintainer's "these builds are legal" is a self-assertion, not a grant.
+Also avoid assuming that Internet Archive or Quaketastic hosting implies
+permission — it does not.
+
+> **On the shareware episode.**  It is commonly believed to be freely
+> redistributable; the actual *Limited Use Software License Agreement* is
+> narrower.  §6 grants the right to distribute **"the Software as a
+> whole"** free of charge — extracting `pak0.pak` and shipping it
+> standalone is not "as a whole".  §3 prohibits reproducing or preparing
+> derivative works, and §4 separately prohibits use of the contained
+> "art work, images… sound effects, music".  Debian classifies
+> `quake-shareware` as **non-free** and declines to host it.  Carmack's GPL
+> release note said he would *see about* relicensing the shareware episode
+> for redistribution — there is no evidence it ever happened.  Compounding
+> this, **`ftp.idsoftware.com` is dead** (DNS resolves; ports closed), so
+> even a fetch-at-install recipe would point at a third-party mirror that
+> holds no redistribution right of its own.  Recommendation: treat the
+> shareware data as Tier C at best, and make **LibreQuake** the default
+> out-of-the-box content so an engine install is playable with no
+> proprietary data at all.
+
+- [ ] **Provenance + takedown hygiene** — record per-package provenance
+      (Quaddicted exposes stable content-addressed `by-sha256/` IDs and
+      asks only for attribution), publish a DMCA/takedown contact, and act
+      on requests promptly.
+- [ ] **Naming and trademark care** — "Quake" is a registered id Software
+      trademark, and enforcement in this space is **trademark-forward**
+      (the QDoom project drew a cease-and-desist over trademark/logo use,
+      then was invited to ship officially).  Package *names* and branding
+      deserve as much care as package contents.
+
+> *Correction carried into the plan:* "Slipgate Cyberdemon" does not exist
+> as a pack — most likely a garbling of **Slipgate Sightseer**
+> (slipseer.com), which is a community *site*, not a release.
 
 ---
 
