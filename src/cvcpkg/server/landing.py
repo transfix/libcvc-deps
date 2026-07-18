@@ -72,9 +72,7 @@ def brand_logo_asset() -> tuple[bytes, str]:
         from importlib.resources import files as _res_files
 
         data = (
-            _res_files("cvcpkg.server")
-            .joinpath("assets", "cyberpc-angel-gears.png")
-            .read_bytes()
+            _res_files("cvcpkg.server").joinpath("assets", "cyberpc-angel-gears.png").read_bytes()
         )
         return data, "image/png"
     except (FileNotFoundError, ModuleNotFoundError, OSError):

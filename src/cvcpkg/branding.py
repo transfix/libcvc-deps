@@ -115,11 +115,7 @@ def _color_art_line(line: str, mode: str) -> str:
     blue = line[:_BLUE_BAND_END]
     gray = line[_BLUE_BAND_END:_GRAY_BAND_END]
     word = line[_GRAY_BAND_END:]
-    return (
-        _paint(blue, "blue", mode)
-        + _paint(gray, "gray", mode)
-        + _paint(word, "white", mode)
-    )
+    return _paint(blue, "blue", mode) + _paint(gray, "gray", mode) + _paint(word, "white", mode)
 
 
 def render_splash(
