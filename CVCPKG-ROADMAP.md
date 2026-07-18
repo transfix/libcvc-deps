@@ -161,7 +161,7 @@ flowchart TD
 | 16 | Prefix Provenance & Server Seeding | ⬜ Planned — install prefixes carry catalog info + recipes in `share/cvcpkg/` so a prefix can seed a cvcpkg-server; org/private status explicit with warnings |
 | 17 | Recipe Archives — Declared Artifacts & Package-Page UX | ⬜ Planned — schema-declared recipe artifacts, full recipe directories on the server, downloadable recipe archives, collapsible artifact viewer, package-list layout rework |
 | 18 | Server Backups & Restore | ⬜ Planned — first-class recipe/package backup + restore commands, admin-managed scheduled backup jobs to the storage backends |
-| 19 | Application Packaging & Desktop Delivery | ⬜ Planned — recipe entry points, desktop assets, exe/MSI + AppImage + dmg installer commands from a prefix, self-mounting prefix capsule (feasibility: native per-OS mechanisms, no Docker) |
+| 19 | Application Packaging & Desktop Delivery | ⬜ Planned — recipe entry points, desktop assets, exe/MSI + AppImage + dmg installer commands from a prefix, `cvcpkg bake` self-mounting prefix binaries (feasibility: native per-OS mechanisms + persistent state layers + cosmo APE variant, no Docker) |
 | 20 | **PyPI Release** | ⬜ **Final phase** — the project/repo rename, trusted-publisher config, and the gated publish. Deliberately last: `pip install cvcpkg` ships only after the roadmap is otherwise complete. |
 
 **Road to PyPI (`pip install cvcpkg`):** the PyPI publish is the **last phase of the
@@ -1477,12 +1477,14 @@ platform.
 - [ ] **macOS** — a command to easily make a **dmg installer** from an
       install prefix.
 
-#### Self-mounting prefix capsule (feasibility)
+#### `cvcpkg bake` — self-mounting prefix binaries (feasibility)
 
-Research the feasibility of packaging an install prefix as a **single
-binary** that, when run, launches the user into a **shell with the entire
-install prefix mounted and available** — as a **user-mutable volume that
-unmounts when the main shell (or entry point) exits**.
+**`cvcpkg bake <prefix>`** packages an install prefix as a **single binary
+deliverable with a defined entry point**: executing the bake launches the
+user into that entry point (an application entry point from the recipe, or
+a shell by default) with the **entire install prefix mounted and
+available** — as a **user-mutable volume that unmounts when the main shell
+(or entry point) exits**.
 
 **Feasibility verdict (researched 2026-07-18): no Docker required — on any
 platform.**  On Linux everything needed is a plain unprivileged process
@@ -1499,62 +1501,167 @@ Per-platform mechanism ladder (best first, detected at runtime):
   zstd) with the prefix appended as a squashfs image (the AppImage
   type-2 runtime layout).  `unshare(CLONE_NEWUSER|CLONE_NEWNS)` →
   squashfuse mounts the image as `lowerdir` → kernel **overlayfs upper
-  layer** for mutability (tmpfs by default; `--overlay DIR` for a
-  persistent layer) → exec the user's `$SHELL` with the prefix activated.
-  Teardown is a **kernel invariant**: when the last process in the mount
-  namespace exits — even on SIGKILL — the kernel destroys the namespace
-  and every mount in it; no cleanup code runs at all.  Fallback rungs:
-  fuse-overlayfs (kernels 4.18–5.10), plain FUSE mount with
-  `-o auto_unmount` (no userns), proot, and finally makeself-style
+  layer** for mutability → exec the entry point with the prefix
+  activated.  Teardown is a **kernel invariant**: when the last process
+  in the mount namespace exits — even on SIGKILL — the kernel destroys
+  the namespace and every mount in it; no cleanup code runs at all.
+  Fallback rungs: fuse-overlayfs (kernels 4.18–5.10), plain FUSE mount
+  with `-o auto_unmount` (no userns), proot, and finally makeself-style
   extract-and-run (no kernel features at all — the nix-portable-style
   capability ladder).
 - **macOS** — launcher + appended read-only dmg;
   `hdiutil attach -nobrowse -mountpoint … -shadow <file>` gives a
   **natively copy-on-write, user-mutable volume** with no kext, no admin,
   no macFUSE (rejected: kext/Reduced-Security friction on Apple Silicon).
-  The shadow file *is* the mutable layer: delete it to reset, keep it to
-  persist, `hdiutil convert -shadow` to commit.  Mounts outlive the
-  process, so the launcher needs a watchdog `hdiutil detach` plus a
-  stale-attachment sweep on start.
-- **Windows** — **no native, no-admin, writable mount path exists**
-  (VHDX attach is admin-only).  Default: self-extracting stub into a
-  content-addressed `%LOCALAPPDATA%` cache + spawned shell with the
-  prefix env, janitor cleanup for crashed sessions.  Optional: no-admin
-  **read-only ISO mount** (standard users since Windows 8) plus a scratch
-  dir; ProjFS / WinFsp modes only where pre-enabled (one-time admin).
+  Bonus finding: `hdiutil attach` has a documented **`-section`** option
+  (0-based 512-byte sectors) which, combined with
+  `-imagekey diskimage-class=CRawDiskImage`, may attach the dmg payload
+  **in place at its byte offset inside the bake binary** with no carve
+  step — validate per macOS release in CI, and keep carve-to-cache as
+  the fallback (commit needs the standalone base image anyway).  Mounts
+  outlive the process, so the launcher needs a watchdog `hdiutil detach`
+  plus a stale-attachment sweep on start.
+- **Windows** — **read-only ISO mount + scratch directory** (validated:
+  standard users can `Mount-DiskImage` ISOs with no admin since
+  Windows 8; always read-only; `-StorageType ISO` lifts the `.iso`
+  extension requirement).  The payload must be a real local file, so the
+  bake carves its ISO out to a content-addressed cache once and reuses
+  it (clear the sparse attribute before mounting — sparse ISOs fail with
+  `0xc03a0005`; never mount from a UNC path).  Layering without ProjFS
+  is **additive shadowing**, not a true union: PATH-order layering
+  (scratch dirs precede mount dirs), env-var redirection of writable app
+  state into scratch, shell-shim copy-up on first write, and NTFS
+  junctions (no-admin) to graft scratch subtrees — deletions of baked
+  files are recorded as tombstones in the bake state, not the
+  filesystem.  SFX-extract remains the fallback (hardened environments
+  can block ISO mounting via policy); ProjFS / WinFsp stay opt-in power
+  modes where pre-enabled.  A 4 GB PE ceiling applies to the bake
+  binary on Windows — Windows will not load executables ≥ 4 GB
+  (llamafile hit exactly this), so oversized payloads must ship as
+  sidecar volumes.
+
+**Persistent bake filesystem — yes, on all three platforms.**  Model every
+bake as an **immutable content-addressed base** plus a **named mutable
+state layer**, with the same verbs everywhere: `bake status`, `bake
+reset` (drop the layer), `bake commit` (fold the layer into a *new*
+immutable base with a new digest), `bake states` (multiple named layers
+over one shared base — per-project scratch spaces):
+
+- *Linux* — reuse a persistent overlayfs `upperdir`/`workdir` across runs
+  (same-filesystem pair, one overlay mount at a time per pair; mount with
+  `userxattr` and `index/metacopy/redirect_dir` off so the upper stays
+  portable plain-files-plus-whiteouts and survives base updates as
+  path-based merging).  Commit = mksquashfs of the merged view.
+- *macOS* — reuse the shadow file (documented behavior: re-attach with
+  the same `-shadow` and prior writes reappear).  The shadow is
+  block-level CoW **tied to the exact base image** — key it by base
+  digest and invalidate on base update; it grows monotonically until
+  merged.  Commit = `hdiutil convert -shadow` → new base dmg (the native
+  flow).
+- *Windows* — the scratch dir is a plain NTFS directory: persistence is
+  free.  Commit = rebuild the ISO from mount + scratch + tombstones.
+
+**One payload format for all platforms?  No.**  ISO9660 was evaluated and
+rejected as the universal payload: Windows CDFS ignores Rock Ridge (POSIX
+modes and symlinks are lost, Joliet caps name components at 64 chars) and
+on Linux kernel iso9660 is a block filesystem (`FS_REQUIRES_DEV`, no
+`FS_USERNS_MOUNT`) that cannot be mounted in an unprivileged userns — the
+FUSE ISO implementations are unmaintained (fuseiso: last upstream release
+2007).  Baking therefore uses the native payload per OS — squashfs
+(Linux), dmg (macOS), ISO (Windows) — or one zip payload in
+extraction mode.
+
+**Cosmo bake — a single APE deliverable for every platform: feasible,
+with sharp edges.**  One cosmocc-built fat APE (x86_64+aarch64) runs the
+same file on Linux, macOS, Windows 8+, and the three BSDs; llamafile
+proves multi-GB payload-carrying APEs in the wild (and its zipalign
+trick — uncompressed page-aligned zip members mmap'd straight from the
+executable — avoids extraction for big blobs).  Cosmo libc provides
+fork/exec on all six OSes (including Windows) for driving host tools
+(`hdiutil`, PowerShell `Mount-DiskImage`, fusermount) and real
+`mount()`/raw-syscall access on Linux/BSD/XNU for the namespace path.
+The pragmatic ladder: default = carve/extract the payload to a
+content-addressed cache and exec the entry point (the APE loader itself
+already does exactly this dd-to-`$TMPDIR` dance); upgrade rungs = Linux
+squashfuse/userns+overlay, macOS hdiutil, Windows ISO mount.  Build with
+**bundled ape loaders** (on Apple Silicon a loader is compiled from
+embedded source on first run — requires Xcode CLT — and downloaded bakes
+face the standard Gatekeeper quarantine dance; never rely on first-run
+`dd` self-assimilation, which mutates the deliverable).
+
+**In-binary persistent data store (cosmo bake) — options, worst to
+best:**
+
+1. **Live self-modifying zip (redbean precedent).**  redbean's
+   `StoreAsset()` appends a new member + rewritten central directory +
+   EOCD to its *own executable* under an fcntl write-lock.  Proof it
+   works — but it is officially proof-of-concept: Linux/XNU/FreeBSD
+   only, **impossible on Windows while running** (the OS write-locks a
+   running exe), append-only growth until offline compaction, and not
+   crash-atomic as implemented.
+2. **Reserved uncompressed zip member as a raw block region + SQLite
+   custom VFS** pwriting into the bake's own byte range (EOCD never
+   moves, so the zip stays valid; the member's CRC goes stale by
+   design — cf. SQLite's official `appendvfs`).  No known prior art
+   does SQLite-into-own-binary; same self-write platform limits as (1).
+3. **EOCD-last append journal** — checksummed records appended after the
+   payload, then a fresh central directory + EOCD (fsync payload
+   *before* the EOCD append makes the trailing EOCD the atomic commit
+   point; a torn tail is detected and truncated at next start).  The
+   most robust *self-write* design; still subject to the Windows lock
+   and 4 GB ceiling.
+4. **Sidecar store + explicit `bake commit` (recommended default).**
+   The bake file stays an immutable, hash-stable artifact; mutable state
+   lives in the content-addressed cache (or beside the binary when
+   writable) as plain files or SQLite.  An explicit `bake commit`
+   rewrites the binary offline — zip-append or full rewrite + atomic
+   rename; on Windows the rename-to-`.old` dance (rclone-style) or
+   apply-on-next-run.  TiddlyWiki's single-file self-rewrite is the UX
+   precedent: live writes go to a store, "saving the file" is a
+   deliberate act.  This is the only option that survives Windows exe
+   locking, ro/noexec media, AV heuristics against self-writing
+   executables, concurrent instances, and macOS signing.
 
 Feasibility work items:
 
-- [ ] **Prototype the Linux capsule** (userns + squashfuse + overlayfs;
-      prove the mount-namespace auto-teardown and the fallback ladder).
-- [ ] **Prototype the macOS capsule** (embedded dmg + `-shadow`
-      copy-on-write; watchdog detach + stale sweep).
-- [ ] **Prototype the Windows capsule** (SFX extract + cache + janitor;
-      evaluate the read-only ISO mount option).
-- [ ] **Decide the capsule format and command** (working name:
-      `cvcpkg seal <prefix>`): stub choice per platform — the Phase 8
-      `cvpkg` APE is the natural cross-platform stub *head* (note: the
-      cosmo `/zip/` VFS is in-process only — child processes can't see
-      it — so it carries the launcher, not the mount), payload
-      compression (xz/zlib/lz4/bzip2 recipes already build for the cosmo
-      platform; zstd would need a `build-cosmo.sh`), and the overlay
-      persistence/`reset`/`commit` UX shared across platforms.
-- [ ] **`squashfs-tools` recipe** — net-new; needed to build capsule
-      payloads from prefixes on the fleet.
+- [ ] **Prototype the Linux bake** (userns + squashfuse + overlayfs;
+      prove the mount-namespace auto-teardown, persistent upperdir reuse,
+      and the fallback ladder).
+- [ ] **Prototype the macOS bake** (embedded dmg + `-shadow`
+      copy-on-write; try in-place `-section` attach vs carve-to-cache;
+      watchdog detach + stale sweep; shadow keyed by base digest).
+- [ ] **Prototype the Windows bake** (carve ISO → no-admin read-only
+      mount + persistent scratch dir + PATH/junction layering +
+      tombstones; SFX-extract fallback; janitor for crashed sessions).
+- [ ] **Prototype the cosmo bake** (fat APE stub + per-OS ladder;
+      bundled loaders; fleet smoke test like Phase 8's cvpkg).
+- [ ] **Design the persistent-state model** (`bake status` / `reset` /
+      `commit` / `states`; sidecar store as the default, EOCD-last
+      append journal as the opt-in in-binary mode).
+- [ ] **Entry points** — the baked entry point comes from the
+      application recipe's CLI entry point (see "Recipes describe
+      applications" above); default entry point is the user's shell with
+      the prefix activated.
+- [ ] **`squashfs-tools` recipe** — net-new; needed to build bake
+      payloads from prefixes on the fleet (payload compression:
+      xz/zlib/lz4/bzip2 recipes already build for the cosmo platform;
+      zstd would need a `build-cosmo.sh`).
 
 Prior art to steal from: **Apptainer** (`apptainer shell image.sif` —
 the exact UX, rootless since 1.1.0, `--writable-tmpfs`/`--overlay`),
 **AppImage type2-runtime** (static stub + appended-squashfs layout,
 `--appimage-extract-and-run` fallback), **enroot** (minimal
 namespaces-only philosophy), **nix-portable** (runtime capability
-ladder), **makeself** (universal floor).  Composes with: the AppImage
+ladder), **makeself** (universal floor), **llamafile** (multi-GB APE
+payloads, zipalign), **redbean** (self-modifying zip, embedded SQLite),
+**TiddlyWiki** (single-file commit UX).  Composes with: the AppImage
 item above (same payload tech), Phase 8's `cvpkg` APE (the portable
-stub), Phase 15's activation semantics (the capsule shell is `cvcpkg
-activate` applied to a mounted root) and prefix registry, Phase 16's
-provenance (catalog + recipes travel *inside* the capsule — and its
-private-org warning applies to sealing one), and Phase 15's air-gap
-story (a capsule is its logical endpoint: one file, no network, no
-unpack).
+stub — a cosmo bake is `cvpkg` + payload), Phase 15's activation
+semantics (the bake shell is `cvcpkg activate` applied to a mounted
+root) and prefix registry, Phase 16's provenance (catalog + recipes
+travel *inside* the bake — and its private-org warning applies to baking
+one), and Phase 15's air-gap story (a bake is its logical endpoint: one
+file, no network, no unpack).
 
 ---
 
