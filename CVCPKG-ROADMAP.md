@@ -236,7 +236,7 @@ flowchart TD
 | 12 | Federation Hardening — Selective Mirroring & Authoritative Resolution | ✅ Complete — mirror allow/deny policy, size budget with usage-based eviction, and top-down root-authoritative resolution |
 | 13 | Identity & Access — OIDC / External Providers | ✅ Complete — OIDC login for the admin dashboard (code flow + PKCE, claim→role mapping); HMAC tokens remain for machines |
 | 14 | Source Recipes — File-Artifact Packages | ✅ Complete — `platform: any` file artifacts consumed by downstream platform recipes, canonized by an end-to-end test |
-| 15 | CLI UX & the Recipe-First Workflow | ⬜ Planned — deprecate `cvc-requirements.yaml`, `~/.cvcpkg/` defaults (settings/recipes/build/install/cache), install-prefix registry (`~/.cvcpkg/local.db`) with aliases + delete/inspect/modify, per-prefix state DB (`share/cvcpkg/prefix.db`: installed-file tracking, **first-class `uninstall`**, idempotent installs, hash-verify, ops journal), recipe generation from existing projects, clean/activate commands, terminal graphics, offline source cache |
+| 15 | CLI UX & the Recipe-First Workflow | ⬜ Planned — deprecate `cvc-requirements.yaml`, `~/.cvcpkg/` defaults (settings/recipes/build/install/cache), install-prefix registry (`~/.cvcpkg/local.db`) with aliases + delete/inspect/modify, per-prefix state DB (`share/cvcpkg/prefix.db`: installed-file tracking, **first-class `uninstall`**, idempotent installs, hash-verify, ops journal), recipe generation from existing projects, clean/activate commands, terminal graphics, offline source cache, recipe-set export + source pre-seeding for air-gapped self-hosting |
 | 16 | Prefix Provenance & Server Seeding | ⬜ Planned — install prefixes carry catalog info + recipes in `share/cvcpkg/` so a prefix can seed a cvcpkg-server; org/private status explicit with warnings |
 | 17 | Recipe Archives — Declared Artifacts & Package-Page UX | ⬜ Planned — schema-declared recipe artifacts, full recipe directories on the server, downloadable recipe archives, collapsible artifact viewer, package-list layout rework |
 | 18 | Server Backups & Restore | ⬜ Planned — first-class recipe/package backup + restore commands, admin-managed scheduled backup jobs to the storage backends |
@@ -1481,6 +1481,61 @@ the prefix**.
       source download cache directory where it makes sense, with the
       default moving to `~/.cvcpkg/cache` (today `~/.cache/cvcpkg`),
       consistent with the `~/.cvcpkg/` consolidation above.
+
+#### Recipe-set export & source pre-seeding (air-gapped self-hosting)
+
+The payoff scenario: pre-download a recipe set **and** its source cache
+online, carry them to an air-gapped host, and build there with a single
+self-contained `cvpkg` / `cvcpkg-sc` binary (Phase 8 / Phase 19–20) — no
+network, no server.  Also the extraction path for a self-contained binary
+that has recipes baked in but where the user wants them on disk.
+
+- [ ] **`cvcpkg recipe export <packages…>` — recipe-set archive with
+      dependency closure.**  Generate and return an archive (tarball / zip /
+      others) of the recipes for the requested packages.  **By default it
+      pulls in the full recipe dependency closure** (build + host_tools +
+      runtime deps, transitively, plus `_common`); `--no-deps` exports only
+      the named recipes.  Include each recipe's declared artifacts
+      (Phase 17: scripts, patches, media) so the result extracts to a
+      **well-formed recipes directory** usable directly by
+      `cvcpkg build/install`.  This is distinct from what exists today:
+      `/v1/recipes/bundle` returns **all** recipes with no selection or
+      closure, and `cvcpkg download` fetches **binary bundles**, not
+      recipe sources.
+- [ ] **Newest-recipe resolution, remote-preferred but local-revision-
+      aware.**  Lean on remote servers for the newest recipes (top-down per
+      Phase 22 authority), but a **newer local `cvc_revision`** wins when
+      present — export the newest available version per recipe from either
+      source, and report where each came from.  Composes with the Phase 22
+      cross-tier consistency warnings.
+- [ ] **Server API for the selective bundle** — extend the recipe API with
+      a package-set + closure parameter (e.g. `POST /v1/recipes/export`
+      taking a package list and a `deps` flag), returning the archive.
+      Honors org/private visibility and the hidden-package rules
+      (Phases 21) — a hidden recipe still exports when explicitly requested
+      or pulled in as a dependency.  The client falls back to composing the
+      closure itself from `/v1/recipes/{name}` when the server predates the
+      endpoint.
+- [ ] **`cvcpkg source fetch <packages…>` — pre-download the source
+      cache.**  Download all upstream source archives *referred to* by the
+      exported recipe set (the `source.url` / `source.artifacts` tarballs,
+      verified by their recipe `sha256`) into a directory, so the
+      air-gapped host builds entirely from the warmed cache (extends the
+      "Pre-download for air-gapped machines" item above from "current
+      recipes" to "an explicit recipe-set closure").  `--cache-dir`
+      controls the destination (default `~/.cvcpkg/cache`).
+- [ ] **Compressed or extracted source cache.**  The pre-downloaded source
+      cache can be kept **either** as the fetched compressed archives
+      **or** already extracted into source directories — a flag selects.
+      Extracted trees are the substrate for later **patch generation and
+      recipe-patch iteration** (Phase 15's developer loop), so the two
+      forms are first-class, not an afterthought.
+- [ ] **One-shot seed + a manifest** — a convenience that runs
+      `recipe export` + `source fetch` together and writes a small manifest
+      (recipe set, versions, source hashes, provenance) so the air-gapped
+      side can verify completeness before building, and so the bundle
+      itself is reproducible and auditable (ties into Phase 16 provenance
+      and Phase 23's forensic journal).
 
 ---
 
