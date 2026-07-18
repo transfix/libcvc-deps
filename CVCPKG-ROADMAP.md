@@ -157,7 +157,7 @@ flowchart TD
 | 12 | Federation Hardening — Selective Mirroring & Authoritative Resolution | ✅ Complete — mirror allow/deny policy, size budget with usage-based eviction, and top-down root-authoritative resolution |
 | 13 | Identity & Access — OIDC / External Providers | ✅ Complete — OIDC login for the admin dashboard (code flow + PKCE, claim→role mapping); HMAC tokens remain for machines |
 | 14 | Source Recipes — File-Artifact Packages | ✅ Complete — `platform: any` file artifacts consumed by downstream platform recipes, canonized by an end-to-end test |
-| 15 | CLI UX & the Recipe-First Workflow | ⬜ Planned — deprecate `cvc-requirements.yaml`, `~/.cvcpkg/` defaults (settings/recipes/build/install/cache), recipe generation from existing projects, clean/activate commands, terminal graphics, offline source cache |
+| 15 | CLI UX & the Recipe-First Workflow | ⬜ Planned — deprecate `cvc-requirements.yaml`, `~/.cvcpkg/` defaults (settings/recipes/build/install/cache), install-prefix registry (`~/.cvcpkg/local.db`) with aliases + delete/inspect/modify, recipe generation from existing projects, clean/activate commands, terminal graphics, offline source cache |
 | 16 | Prefix Provenance & Server Seeding | ⬜ Planned — install prefixes carry catalog info + recipes in `share/cvcpkg/` so a prefix can seed a cvcpkg-server; org/private status explicit with warnings |
 | 17 | Recipe Archives — Declared Artifacts & Package-Page UX | ⬜ Planned — schema-declared recipe artifacts, full recipe directories on the server, downloadable recipe archives, collapsible artifact viewer, package-list layout rework |
 | 18 | Server Backups & Restore | ⬜ Planned — first-class recipe/package backup + restore commands, admin-managed scheduled backup jobs to the storage backends |
@@ -1196,7 +1196,8 @@ inventing a new recipe type.
 
 The developer-facing polish pass: make recipes (not requirements files) the
 one way to describe a build, give cvcpkg a stable per-user home under
-`~/.cvcpkg/`, and make the terminal experience worthy of the web front end.
+`~/.cvcpkg/`, make install prefixes first-class managed objects, and make
+the terminal experience worthy of the web front end.
 
 #### Recipe-first: deprecate the `cvc-requirements.yaml` build style
 
@@ -1246,6 +1247,54 @@ one way to describe a build, give cvcpkg a stable per-user home under
       libraries are *never* classified as build tools: headers and libs are
       deliverables and must survive the build-prefix strip (see Phase 4's
       Build-Prefix Hygiene — mis-filing a library as a host tool is a bug).
+
+#### Install prefix management (`~/.cvcpkg/local.db`)
+
+cvcpkg currently has **no machine-level record of the prefixes it has
+installed**: every command takes `--prefix <path>` (default `./deps`) and
+all state lives inside each prefix tree
+(`share/libcvc-deps/lockfile.yaml` + per-bundle manifests).  The gap has
+real consequences — `cvcpkg gc` documents pruning archives "no longer
+referenced by any installed prefix" but cannot enumerate prefixes, so it
+treats the referenced set as empty; and an install-conflict error message
+already points users at a `cvcpkg uninstall` that does not exist yet.
+Phase 15 gives prefixes a first-class management story:
+
+- [ ] **Track install prefixes in a local database** — when a user installs
+      an install prefix with a bunch of packages, keep track of it in an
+      sqlite database file (by default **`~/.cvcpkg/local.db`**) that maps
+      install prefix names to install prefix locations.  The per-prefix
+      lockfile remains canonical *inside* the prefix; `local.db` is the
+      machine-level index over them.  (This would be the client's first
+      sqlite use — client state today is YAML + a file cache.  Not to be
+      confused with `registries.yaml`, which maps *federated package
+      registries*.)
+- [ ] **Alias shorthand** — a command-line option to set an install
+      prefix's alias shorthand.  (Today the closest thing to a prefix name
+      is the activation prompt tag, which defaults to the directory
+      basename.)
+- [ ] **Delete an install prefix** — a command to delete an install prefix:
+      deregister it from `local.db` and remove the tree.
+- [ ] **Inspect an install prefix** — a command to inspect an install
+      prefix: show installed packages, settings, metadata, etc.  (The
+      lockfile header — platform/arch/config/link, catalog revision — the
+      per-bundle entries, and the host-tools record are the natural data
+      sources.)
+- [ ] **Modify install prefix settings** — commands to modify an install
+      prefix's settings.
+- [ ] **Path or alias everywhere** — when referring to install prefixes,
+      allow using their path as well as their alias in every prefix-taking
+      command (install, list, verify, sync, upgrade, world, build) —
+      **including when activating an install prefix in the shell**: the
+      `cvcpkg activate` front door above resolves aliases through
+      `local.db`.
+- [ ] **Stale-entry tolerance** — prefixes are deliberately portable
+      (self-contained activation scripts, copyable trees), so the database
+      must tolerate prefixes moved, copied, or deleted out-of-band:
+      detect, repair, or prune stale entries rather than break.
+- [ ] **Registry-powered `gc`** — with prefixes enumerable, `cvcpkg gc`
+      computes the real referenced-hash set from each registered prefix's
+      lockfile instead of pruning against an empty set.
 
 #### Terminal experience
 
@@ -1494,6 +1543,9 @@ actions, not something CI does on its own.
 | **C/C++ tooling** | cpkg ([getcpkg.net](https://getcpkg.net/)) | ship the Lua+Ninja project tool as a recipe, plus a cvcpkg Lua resolver helper so `cpkg.lua` scripts pull prebuilt cvcpkg binaries (see Phase 4 Interoperability). |
 | **Compilers (Phase 11)** | clang (→ existing `llvm`), clang20 (→ legacy `llvm20`); feasibility: gcc, gfortran, Intel oneAPI icx/ifx, rust toolchain + cargo package support | package the compiler front ends on the LLVM recipes already in the tree; survey the rest against the redistributable-vs-provisioning boundary (VS2022/MSVC stays provisioning-only). |
 | **Assemblers (Phase 11)** | cross-binutils GNU `as` (aarch64, riscv64, …), vasm | assemblers for common CPUs beyond x86 (`nasm` already covers x86). |
+| **Shells** | bash, zsh (then fish, dash, …) | popular interactive shells for prefix environments — `powershell` is the only shell recipe in the tree today, and the dependencies are already recipes (readline for bash's `--with-installed-readline`, ncurses, pcre2 for zsh's pcre module). |
+| **Editors** | vim, emacs — terminal builds plus GTK and KDE/Qt GUI variants | no editor recipes exist yet.  The GUI variants need a new `gtk3` recipe (vim's and emacs's GTK front ends build against GTK3; the tree's `gtk4` satisfies neither) and `gnutls` for emacs (optional: `libgccjit` for native-comp, `tree-sitter`); the display stack is Wayland-first (emacs pgtk).  The KDE/Qt variants ride the KDE stack below. |
+| **KDE stack** | extra-cmake-modules, dbus, libxml2, libxslt, shared-mime-info, qtdeclarative, qtsvg, qttools, qtwayland, then KDE Frameworks 6 by tier — kcoreaddons, kconfig, karchive, ki18n, kwidgetsaddons, kguiaddons, kitemviews, sonnet, breeze-icons, kirigami (tier 1) up through kxmlgui, kservice, kio (tier 3) | KDE and related dependency recipes.  `qt6` is qtbase-only with a per-submodule recipe precedent (qtshadertools, qtmultimedia), so the extra Qt modules are separate recipes; `dbus` is absent and gates the QtDBus-dependent frameworks; much of the base (glib, wayland, xkbcommon, freetype/harfbuzz/cairo, gettext, aspell) is already in the tree.  Enables the KDE editor variants above and composes with Phase 19's desktop delivery. |
 
 ### Recipe Categories
 
