@@ -3,7 +3,7 @@
 > A cross-platform, language-agnostic binary package archive
 > for the scientific computing community.
 
-*Last updated: 2026-07-16*
+*Last updated: 2026-07-18*
 
 ---
 
@@ -23,11 +23,11 @@ project going forward.
   stays so existing `find_package(libcvc-deps)` calls keep working.
 
 > **Release ordering:** the PyPI publish is the **final phase of the entire
-> roadmap** (Phase 15), not an early milestone.  It happens only after the
+> roadmap** (Phase 20), not an early milestone.  It happens only after the
 > rename (project + repo), the trusted publisher is configured, and **every
-> other roadmap phase — including the pre-release hardening phases 12–14 — is
-> closed**.  Publishing to PyPI claims a name and makes a community-facing
-> commitment, so it is deliberately last.
+> other roadmap phase — including the pre-release hardening phases 12–14 and
+> the v2.0.0 product phases 15–19 — is closed**.  Publishing to PyPI claims a
+> name and makes a community-facing commitment, so it is deliberately last.
 
 ---
 
@@ -138,7 +138,7 @@ flowchart TD
 
 ## Roadmap Phases
 
-### Status Snapshot (2026-07-16)
+### Status Snapshot (2026-07-18)
 
 | Phase | Title | Status |
 |---|---|---|
@@ -157,14 +157,19 @@ flowchart TD
 | 12 | Federation Hardening — Selective Mirroring & Authoritative Resolution | ✅ Complete — mirror allow/deny policy, size budget with usage-based eviction, and top-down root-authoritative resolution |
 | 13 | Identity & Access — OIDC / External Providers | ✅ Complete — OIDC login for the admin dashboard (code flow + PKCE, claim→role mapping); HMAC tokens remain for machines |
 | 14 | Source Recipes — File-Artifact Packages | ✅ Complete — `platform: any` file artifacts consumed by downstream platform recipes, canonized by an end-to-end test |
-| 15 | **PyPI Release** | ⬜ **Final phase** — the project/repo rename, trusted-publisher config, and the gated publish. Deliberately last: `pip install cvcpkg` ships only after the roadmap is otherwise complete. |
+| 15 | CLI UX & the Recipe-First Workflow | ⬜ Planned — deprecate `cvc-requirements.yaml`, `~/.cvcpkg/` defaults (settings/recipes/build/install/cache), recipe generation from existing projects, clean/activate commands, terminal graphics, offline source cache |
+| 16 | Prefix Provenance & Server Seeding | ⬜ Planned — install prefixes carry catalog info + recipes in `share/cvcpkg/` so a prefix can seed a cvcpkg-server; org/private status explicit with warnings |
+| 17 | Recipe Archives — Declared Artifacts & Package-Page UX | ⬜ Planned — schema-declared recipe artifacts, full recipe directories on the server, downloadable recipe archives, collapsible artifact viewer, package-list layout rework |
+| 18 | Server Backups & Restore | ⬜ Planned — first-class recipe/package backup + restore commands, admin-managed scheduled backup jobs to the storage backends |
+| 19 | Application Packaging & Desktop Delivery | ⬜ Planned — recipe entry points, desktop assets, exe/MSI + AppImage + dmg installer commands from a prefix |
+| 20 | **PyPI Release** | ⬜ **Final phase** — the project/repo rename, trusted-publisher config, and the gated publish. Deliberately last: `pip install cvcpkg` ships only after the roadmap is otherwise complete. |
 
 **Road to PyPI (`pip install cvcpkg`):** the PyPI publish is the **last phase of the
-roadmap** (Phase 15), not an early step.  The *engineering* readiness for it (Phase 1.5)
+roadmap** (Phase 20), not an early step.  The *engineering* readiness for it (Phase 1.5)
 is done, but the release itself happens only after the remaining phases — including the
-three pre-release hardening phases below (12–14) — are closed.  This is a deliberate
-correction: publishing to PyPI is a one-way, name-claiming, community-facing commitment,
-so it comes at the very end.
+pre-release hardening phases (12–14) and the v2.0.0 product phases (15–19) — are
+closed.  This is a deliberate correction: publishing to PyPI is a one-way,
+name-claiming, community-facing commitment, so it comes at the very end.
 
 ### Phase 1 — Foundation
 
@@ -208,7 +213,7 @@ work before a `pip install cvcpkg` is even buildable.  All of these are done
 hardening pass — private-data isolation, tenant scoping, tar-slip and
 reflected-XSS fixes).
 
-> **The actual PyPI publish is not here.**  It moved to **Phase 15 — PyPI
+> **The actual PyPI publish is not here.**  It moved to **Phase 20 — PyPI
 > Release**, the final phase of the roadmap.  The rename (project + repo),
 > trusted-publisher configuration, and the gated publish all happen there,
 > after every other phase is closed.  See the release-ordering note at the top
@@ -227,7 +232,7 @@ reflected-XSS fixes).
       installed wheel
 - [x] Publish workflow (`cvcpkg-publish.yml`) wired for PyPI trusted
       publishing (OIDC), gated behind the `CVCPKG_PUBLISH_TO_PYPI` repo
-      variable so a stable tag cannot publish until Phase 15 flips it on
+      variable so a stable tag cannot publish until Phase 20 flips it on
 
 #### Admin CLI Completeness
 
@@ -1030,6 +1035,32 @@ artifact as a versioned GitHub release asset** so a fresh machine can fetch a si
 self-contained `cvpkg` (`curl … | sh`) and bootstrap the rest of the catalog with zero
 prior dependencies.
 
+#### Compiler, toolchain & assembler recipe expansion (pre-2.0.0)
+
+Concrete recipe work queued for the v2.0.0 (pre-PyPI) window, building on the
+`llvm`, `llvm20`, `mingw-w64`, `nasm`, and `rust` recipes already in the tree:
+
+- [ ] **`clang` recipe** — layered on the existing `llvm` recipe (the compiler
+      front end is not yet packaged, only the LLVM libraries/tools are).
+- [ ] **`clang20` recipe** — same shape, depending on the legacy `llvm20`
+      recipe, for consumers pinned to the LLVM 20 line.
+- [ ] **GCC-family feasibility** — evaluate `gcc` and `gfortran` recipes
+      (three-stage bootstrap, target libraries, per-platform viability; ties
+      into Phase 4's Fortran language support).
+- [ ] **Other toolchain feasibility** — survey the remaining compiler
+      toolchains against the redistributable-vs-provisioning boundary above:
+      **Intel oneAPI** C/C++ (`icx`) and Fortran (`ifx`) — licensing decides
+      prebuilt-staging recipe vs provisioning dep; **VS2022/MSVC** — stays a
+      builder-provisioning dependency (not redistributable, per the table
+      above); **Rust** — grow the existing `rust` recipe into a full toolchain
+      story with first-class Rust *package* (cargo/crates) support (ties into
+      Phase 4's Rust language support).
+- [ ] **Assemblers beyond x86** — `nasm` covers x86; add recipes for
+      assemblers targeting the other common CPUs — per-target GNU `as` via
+      cross-`binutils` (aarch64, riscv64, …) and standalone retargetable
+      assemblers (e.g. `vasm`) — so bare-metal and cross-arch builds can be
+      served from the catalog.
+
 ---
 
 ### Phase 12 — Federation Hardening (Selective Mirroring & Authoritative Resolution)
@@ -1159,14 +1190,253 @@ inventing a new recipe type.
 
 ---
 
-### Phase 15 — PyPI Release (Final Phase)
+### Phase 15 — CLI UX & the Recipe-First Workflow
+
+**Status: Planned — required before the v2.0.0 PyPI release**
+
+The developer-facing polish pass: make recipes (not requirements files) the
+one way to describe a build, give cvcpkg a stable per-user home under
+`~/.cvcpkg/`, and make the terminal experience worthy of the web front end.
+
+#### Recipe-first: deprecate the `cvc-requirements.yaml` build style
+
+- [ ] **Flag `cvc-requirements.yaml` for deprecation** and lean only on
+      recipes.  `cvcpkg install --from cvc-requirements.yaml` keeps working
+      through v2.0.0 but emits a deprecation warning and a pointer to the
+      migration path; the docs and quick-starts stop leading with it.
+- [ ] **Downstream projects maintain recipes in their own source.**  The
+      supported model: a project carries its recipes and the related
+      scripts/media as part of its source tree, exactly like this repo's
+      `recipes/` directory (composes with Phase 17's declared artifacts).
+- [ ] **Developer loop for downstream users** — an easy workflow to do a
+      local build of a project, debug it, and generate + add recipe patches
+      (`cvcpkg`-assisted patch generation rather than hand-maintained diffs).
+- [ ] **Recipe generation from existing projects** — `cvcpkg` commands that
+      scaffold a working recipe from an existing autotools, CMake, qmake,
+      cpkg, Conan, or similar project (extends `cvcpkg init`'s current
+      cmake/meson/autotools templates with build-system detection/import).
+
+#### `~/.cvcpkg/` — settings, search paths, and default prefixes
+
+- [ ] **Recipe discovery** — by default, look for a `recipes/` directory in
+      the current working directory, then in a list of paths from an
+      environment variable (e.g. `CVCPKG_RECIPES_PATH`), then in hardcoded
+      defaults like `~/.cvcpkg/recipes`.  (Today: bundled wheel recipes →
+      repo walk-up → CWD fallback; this makes the CWD-first overlay story
+      explicit and user-extensible.)
+- [ ] **User settings in `~/.cvcpkg/settings.yaml`** — user settings override
+      built-in defaults *and* environment variables.  (Today config lives in
+      `~/.config/cvcpkg/config.yaml`; consolidate the user-facing home under
+      `~/.cvcpkg/` as part of this phase.)
+- [ ] **Default build prefix `~/.cvcpkg/build`** — builds no longer require
+      an explicit `--prefix` to have a sane, stable home.
+- [ ] **Default install prefix `~/.cvcpkg/install`** — likewise for
+      installs; `--prefix` remains the override.
+- [ ] **`cvcpkg clean` for build trees** — make it easy to clean the whole
+      build directory or the build directories of specific packages only.
+      (Today's `clean` only sweeps orphaned temp work dirs.)
+- [ ] **First-class prefix activation** — a command that makes it easy to
+      activate an install prefix so the user can run the apps and runtime
+      libs installed there.  Today install writes venv-style
+      `bin/activate*` scripts; add a `cvcpkg activate <prefix>` front door
+      (spawn a subshell or print eval-able environment) so users don't need
+      to know the script paths per shell.
+- [ ] **Headers land in `<install prefix>/inc`** — make sure library recipes
+      correctly put headers in the prefix's `inc` directory, and that
+      libraries are *never* classified as build tools: headers and libs are
+      deliverables and must survive the build-prefix strip (see Phase 4's
+      Build-Prefix Hygiene — mis-filing a library as a host tool is a bug).
+
+#### Terminal experience
+
+- [ ] **Nice terminal graphics when the terminal supports it** — progress
+      bars for package downloads and installs, colorized status/summaries,
+      spinners for resolution — using the **same color palette as the web
+      front end** (the Bulma-dark landing/package pages: link blue
+      `#3273dc`, success green `#48c774`, warning yellow `#ffdd57`, danger
+      red `#ff3838`, on the `#0a0a0a`/`#1a1a2e` dark ground).  Degrade
+      gracefully: plain output on dumb terminals/CI pipes, honor
+      `NO_COLOR`.
+
+#### Source-complete & offline builds
+
+- [ ] **End-to-end from-source builds for downstream projects** — make sure
+      a downstream project's recipe build builds *everything* correctly
+      from sources when the packages aren't available on a cvcpkg-server
+      (the Phase 1 source-fallback path, canonized by an end-to-end
+      downstream-project test so it cannot regress).
+- [ ] **Pre-download for air-gapped machines** — an option to pre-download
+      the recipe sources/archives *referred to* by recipes (as opposed to
+      the scripts/docs/media packaged *with* the recipe, which Phase 17
+      covers) and look them up in the cache **by hash** at build time, so a
+      machine with no internet access can build from a warmed cache.
+- [ ] **Cache directory flag + default** — add a CLI flag for the recipe
+      source download cache directory where it makes sense, with the
+      default moving to `~/.cvcpkg/cache` (today `~/.cache/cvcpkg`),
+      consistent with the `~/.cvcpkg/` consolidation above.
+
+---
+
+### Phase 16 — Prefix Provenance & Server Seeding
+
+**Status: Planned — required before the v2.0.0 PyPI release**
+
+An install prefix should be able to tell its own story: what was installed,
+from which recipes, under which organization — completely enough that the
+prefix itself can bootstrap a new cvcpkg-server.
+
+- [ ] **Catalog info saved into the prefix** — a flag for the `cvcpkg
+      install` step such that, when installing a prefix, it saves catalog
+      info in a **`share/cvcpkg/`** directory so the *entire install prefix*
+      can be used to **seed a cvcpkg-server and catalog**.  (Aligns with the
+      rename: today's per-prefix records — `manifest.yaml`,
+      `host-tools.yaml` — live under `share/libcvc-deps/`; the seeding
+      records land under `share/cvcpkg/`.)
+- [ ] **Recipes installed for provenance** — the installed packages' recipes
+      are installed into that same directory, both for provenance (the
+      prefix records exactly how its contents were built) and so that a
+      cvcpkg-server seeded from the prefix can **deliver the recipes to end
+      users** (composes with Phase 17's complete recipe archives).
+- [ ] **Organization info & private status are explicit** — when adding the
+      catalog info to the install, organization info **including private
+      status** is recorded explicitly, and cvcpkg **warns** when a prefix
+      seed would carry private-org content — so seeding a server from a
+      prefix can never silently republish private packages (extends the
+      Phase 5/12 public-vs-org namespace invariants to prefix-seeded
+      servers).
+
+---
+
+### Phase 17 — Recipe Archives: Declared Artifacts & Package-Page UX
+
+**Status: Planned — required before the v2.0.0 PyPI release**
+
+A recipe is more than a `recipe.yaml`: it is the yaml plus its build/test
+scripts, patches, docs, and media.  Phase 17 makes that whole unit explicit
+in the schema, complete on the server, and downloadable + browsable on the
+package page.
+
+#### Declared artifacts (schema)
+
+- [ ] **All related artifacts declared in the schema** — a recipe declares
+      every artifact that belongs to it (build/test scripts, patches, helper
+      files, docs, images, media), so it is unambiguous what a well-formed
+      recipe directory — and therefore a recipe archive — must contain.
+      (Today scripts are only *implied* by `build.matrix[].script`,
+      `test.script`, and `patches:`; nothing declares auxiliary files.)
+
+#### Complete recipes on the server
+
+- [ ] **The server stores the full recipe directory** — not only recipe
+      yamls but **every script and artifact** that goes along with the
+      recipe, stored in the recipe's directory server-side.  (`cvcpkg
+      recipe push` already uploads the recipe directory's files; the
+      declared-artifact schema makes completeness checkable and enforced.)
+- [ ] **Downloadable recipe archives** — the package page shows a link to
+      download an archive (zip or tarball) of the recipe including all of
+      its scripts and artifacts, such that an end user who downloads and
+      extracts these recipe archives into a directory has a **well-formed
+      recipe directory** usable with the normal cvcpkg commands to build,
+      install, and publish packages.
+
+#### Package-page recipe section
+
+- [ ] **Show the declared artifacts alongside the recipe** — in the recipe
+      section, list the recipe and its declared artifacts (likely scripts)
+      together.
+- [ ] **Click-to-expand, initially folded** — the recipe and each artifact
+      are clickable and expand to show their contents; everything starts
+      folded up so the user has to click to reveal each one, saving screen
+      real estate.
+- [ ] **Inline media display** — if declared artifacts are images or other
+      media, display them inline in the recipe section the same way a
+      script or recipe yaml is shown.
+
+#### Package-page layout
+
+- [ ] **Package list under the description** — move the package (variant)
+      list up to sit under the package description instead of at the very
+      bottom of the page.
+- [ ] **Collapse revision rows** — for each platform/arch row, collapse the
+      rows that show the same package at different revisions: show only the
+      newest revision, and let the user click to expand the rest of the
+      visible (unyanked) packages.
+
+---
+
+### Phase 18 — Server Backups & Restore
+
+**Status: Planned — required before the v2.0.0 PyPI release**
+
+`cvcpkg server backup` today is a database dump.  Before 2.0.0 the server
+needs **first-class, restorable** backups of the things that actually matter:
+the recipes and the packages.
+
+- [ ] **First-class recipe backups** — back up *all* recipes, with flags
+      controlling inclusion of public and private-org recipes (a backup of
+      private-org content is explicit, never accidental).
+- [ ] **Selective package backups** — back up some or all packages with
+      flags selecting by **size, date, type, etc.**, so an operator can take
+      a full archive backup or a bounded "recipes + recent/small packages"
+      one.
+- [ ] **Restore command** — `cvcpkg server restore` restores a recipe backup
+      or a full recipe + package backup onto a server (the other half of
+      Phase 16's seed-from-prefix story: a server can be rebuilt from either
+      a backup or a seeded prefix).
+- [ ] **Scheduled backups, admin-managed** — a dedicated scheduled-backup
+      job manageable by admins (admin API, the `/admin` dashboard, and CLI)
+      that handles regular backups to **various backend types** — reusing
+      the Phase 5 storage-backend layer (`s3`, `gcs`, `azure`, `sftp`,
+      `rsync`, `rclone`, `file`, `gh-release`) for offsite destinations.
+
+---
+
+### Phase 19 — Application Packaging & Desktop Delivery
+
+**Status: Planned — required before the v2.0.0 PyPI release**
+
+cvcpkg prefixes already carry applications, not just libraries.  Phase 19
+lets recipes describe the application surface (entry points, icons, docs,
+media) and turns a finished install prefix into a native installer per
+platform.
+
+#### Recipes describe applications
+
+- [ ] **CLI entry points in recipes** — applications that have CLI entry
+      points specify them in their recipes (the AppImage/installer work
+      below consumes them).
+- [ ] **Desktop assets in recipes** — recipes can specify desktop icons,
+      help documentation, images, video, and any other media as part of the
+      recipe, installed with the package (declared via Phase 17's artifact
+      schema).
+- [ ] **Desktop integration** — optionally edit the user's desktop to add a
+      desktop icon / start-menu launcher / program-files entry, etc., for an
+      installed application in the prefix (opt-in at install time; cleanly
+      reversible).
+
+#### Installers from an install prefix
+
+- [ ] **Windows** — a command to easily make an **exe or MSI installer**
+      from an install prefix, using info from the manifest, README, and
+      other cvcpkg metadata in the prefix (Phase 16's provenance records
+      supply the metadata).
+- [ ] **Linux** — a command to easily make an **AppImage** containing the
+      contents of an install prefix, using an entry point specified in the
+      application's recipe.
+- [ ] **macOS** — a command to easily make a **dmg installer** from an
+      install prefix.
+
+---
+
+### Phase 20 — PyPI Release (Final Phase)
 
 **Status: Blocked on all prior phases — deliberately last**
 
 The **actual** `pip install cvcpkg` release.  This is the terminal phase of the
 roadmap: it happens only after every other phase (including the Phase 12–14
-hardening) is closed.  Publishing to PyPI claims the `cvcpkg` name and is a
-one-way, community-facing commitment, so it is sequenced last on purpose.
+hardening and the Phase 15–19 v2.0.0 product work) is closed.  Publishing to
+PyPI claims the `cvcpkg` name and is a one-way, community-facing commitment,
+so it is sequenced last on purpose.
 
 The engineering readiness for it landed long ago in Phase 1.5; what remains are
 the release *actions*, in order:
@@ -1222,6 +1492,8 @@ actions, not something CI does on its own.
 | **Python wheels (Phase 7)** | numpy, scipy, h5py, mpi4py, … × {cp311, cp312, cp313, cp313t} | per-interpreter wheel matrix; the cp313t column ships provably no-GIL-safe packages. |
 | **Bootstrap (Phase 8)** | cvcpkg (self-install), cvpkg (APE) | cvcpkg installable by cvcpkg; single-binary zero-dependency bootstrap. |
 | **C/C++ tooling** | cpkg ([getcpkg.net](https://getcpkg.net/)) | ship the Lua+Ninja project tool as a recipe, plus a cvcpkg Lua resolver helper so `cpkg.lua` scripts pull prebuilt cvcpkg binaries (see Phase 4 Interoperability). |
+| **Compilers (Phase 11)** | clang (→ existing `llvm`), clang20 (→ legacy `llvm20`); feasibility: gcc, gfortran, Intel oneAPI icx/ifx, rust toolchain + cargo package support | package the compiler front ends on the LLVM recipes already in the tree; survey the rest against the redistributable-vs-provisioning boundary (VS2022/MSVC stays provisioning-only). |
+| **Assemblers (Phase 11)** | cross-binutils GNU `as` (aarch64, riscv64, …), vasm | assemblers for common CPUs beyond x86 (`nasm` already covers x86). |
 
 ### Recipe Categories
 
