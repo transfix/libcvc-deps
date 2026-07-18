@@ -17,7 +17,7 @@ project going forward.
 - The Python distribution is already published as **`cvcpkg`** (not
   `libcvc-deps`).
 - The GitHub repository will be renamed **`transfix/libcvc-deps` →
-  `transfix/cvcpkg`** *before* the first PyPI publish (see Phase 1.5).
+  `transfix/cvcpkg`** *before* the first PyPI publish (see Phase 20).
 - Backward compatibility is retained where downstream consumers depend on
   the old name — e.g. the `libcvc-depsConfig.cmake` compatibility wrapper
   stays so existing `find_package(libcvc-deps)` calls keep working.
@@ -853,7 +853,8 @@ flowchart LR
 
 ### Phase 9 — Fleet & Platform Expansion
 
-**Status: Planned**
+**Status: In Progress** — DragonflyBSD platform + provisioning underway in a
+parallel track (matching the Status Snapshot above).
 
 - [ ] **GhostBSD builders** — GhostBSD is FreeBSD-based (binary-compatible
       userland, `pkg` packages), so a builder validates the desktop-BSD
@@ -1284,14 +1285,15 @@ Phase 15 gives prefixes a first-class management story:
       prefix's settings.
 - [ ] **Path or alias everywhere** — when referring to install prefixes,
       allow using their path as well as their alias in every prefix-taking
-      command (install, list, verify, sync, upgrade, world, build) —
-      **including when activating an install prefix in the shell**: the
-      `cvcpkg activate` front door above resolves aliases through
-      `local.db`.
-- [ ] **Stale-entry tolerance** — prefixes are deliberately portable
-      (self-contained activation scripts, copyable trees), so the database
-      must tolerate prefixes moved, copied, or deleted out-of-band:
-      detect, repair, or prune stale entries rather than break.
+      command (install, list, verify, sync, upgrade, world, build,
+      pack/build-all/pack-all, cpkg deps, …) — **including when activating
+      an install prefix in the shell**: the `cvcpkg activate` front door
+      above resolves aliases through `local.db`.
+- [ ] **Stale-entry tolerance** — prefix trees can be moved, copied, or
+      deleted out-of-band (activation scripts are self-contained, though
+      they bake in the absolute prefix path), so the database must detect,
+      repair — e.g. re-register and regenerate the path-baked activation
+      scripts after a move — or prune stale entries rather than break.
 - [ ] **Registry-powered `gc`** — with prefixes enumerable, `cvcpkg gc`
       computes the real referenced-hash set from each registered prefix's
       lockfile instead of pruning against an empty set.
@@ -1614,7 +1616,8 @@ The project has been restructured for the **cvcpkg** identity:
   until PyPI release to avoid breaking CI in downstream repos; GitHub will
   redirect git URLs but `uses:` directives in libcvc and TexMol workflows
   must be updated simultaneously)
-- [ ] **PyPI publication** — `pip install cvcpkg` (pending final QA)
+- [ ] **PyPI publication** — `pip install cvcpkg` (the final roadmap phase;
+  see Phase 20)
 
 ---
 
