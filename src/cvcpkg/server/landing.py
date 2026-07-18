@@ -21,25 +21,69 @@ _GITHUB_URL = f"https://github.com/{_GITHUB_REPO}"
 # at /favicon.ico and /assets/cyberpc-angel-gears.png (see app.py).
 _BRAND_LOGO_PATH = "/assets/cyberpc-angel-gears.png"
 
+#: Operator override for the site icon.  Either an absolute ``http(s)://``
+#: URL (linked directly, not proxied) or a path to a local image file
+#: (served from the asset route).  Unset uses the bundled gears logo.
+_SITE_LOGO = os.environ.get("CVCPKG_SITE_LOGO", "").strip()
+
+_LOGO_MEDIA_TYPES = {
+    ".png": "image/png",
+    ".svg": "image/svg+xml",
+    ".ico": "image/x-icon",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+}
+
+
+def _logo_is_remote() -> bool:
+    """True when the configured logo is an external URL rather than a file."""
+    return _SITE_LOGO.startswith(("http://", "https://"))
+
+
+def brand_logo_href() -> str:
+    """URL used in ``<link rel="icon">`` and the social-image meta tags."""
+    return _SITE_LOGO if _logo_is_remote() else _BRAND_LOGO_PATH
+
 
 @functools.lru_cache(maxsize=1)
-def brand_logo_bytes() -> bytes:
-    """Return the bundled CyberPC Angel gears PNG, or ``b""`` if missing.
+def brand_logo_asset() -> tuple[bytes, str]:
+    """Return ``(image_bytes, media_type)`` for the served site icon.
 
-    Read from package data so it ships in the wheel; cached after the first
-    read.  Returns empty bytes rather than raising so the site still renders
-    if the asset is somehow absent.
+    Honors ``CVCPKG_SITE_LOGO`` when it names a local file; otherwise falls
+    back to the bundled CyberPC Angel gears PNG (package data, so it ships
+    in the wheel).  Returns empty bytes rather than raising so the site
+    still renders if an asset is missing or unreadable — a misconfigured
+    override degrades to the bundled default rather than breaking the page.
     """
+    if _SITE_LOGO and not _logo_is_remote():
+        import pathlib
+
+        custom = pathlib.Path(_SITE_LOGO).expanduser()
+        try:
+            data = custom.read_bytes()
+            media = _LOGO_MEDIA_TYPES.get(custom.suffix.lower(), "image/png")
+            return data, media
+        except OSError:
+            pass  # fall through to the bundled default
+
     try:
         from importlib.resources import files as _res_files
 
-        return (
+        data = (
             _res_files("cvcpkg.server")
             .joinpath("assets", "cyberpc-angel-gears.png")
             .read_bytes()
         )
+        return data, "image/png"
     except (FileNotFoundError, ModuleNotFoundError, OSError):
-        return b""
+        return b"", "image/png"
+
+
+def brand_logo_bytes() -> bytes:
+    """Backwards-compatible accessor for just the icon bytes."""
+    return brand_logo_asset()[0]
 
 
 # Absolute site origin, used to build absolute URLs for social-preview
@@ -288,13 +332,16 @@ def _footer_html() -> str:
 
 
 def _head_html(title: str) -> str:
-    logo_url = f"{_SITE_URL}{_BRAND_LOGO_PATH}"
+    href = brand_logo_href()
+    # Social scrapers need an absolute URL; a configured remote logo already
+    # is one, a served asset gets the site origin prepended.
+    logo_url = href if _logo_is_remote() else f"{_SITE_URL}{href}"
     return f"""<head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{title}</title>
-  <link rel="icon" type="image/png" href="{_BRAND_LOGO_PATH}" />
-  <link rel="apple-touch-icon" href="{_BRAND_LOGO_PATH}" />
+  <link rel="icon" href="{href}" />
+  <link rel="apple-touch-icon" href="{href}" />
   <meta property="og:title" content="{title}" />
   <meta property="og:type" content="website" />
   <meta property="og:image" content="{logo_url}" />
@@ -3817,6 +3864,12 @@ cvcpkg builds list --server https://cvcpkg.org --token cvctok_...
           <code>CVCPKG_SITE_HERO</code>.
           Set <code>CVCPKG_GITHUB_REPO</code> to change the
           GitHub link (default: <code>transfix/libcvc-deps</code>).
+          <code>CVCPKG_SITE_LOGO</code> overrides the favicon and social
+          image &mdash; either an <code>https://</code> URL or a path to a
+          local image file (png/svg/ico/jpg/webp); unset serves the bundled
+          CyberPC Angel, LLC gears logo.  <code>CVCPKG_SITE_URL</code> sets
+          the origin used to build absolute social-image URLs
+          (default: <code>https://cvcpkg.org</code>).
         </p>
       </div>
     </div>

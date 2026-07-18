@@ -1853,19 +1853,21 @@ def create_app(
     @app.get("/favicon.ico", include_in_schema=False)
     @app.get("/assets/cyberpc-angel-gears.png", include_in_schema=False)
     async def brand_logo():
-        """Serve the CyberPC Angel, LLC gears logo (favicon + social image).
+        """Serve the site icon (favicon + social image).
 
-        Self-hosted from the package so the brand mark needs no external
-        CDN.  Cached aggressively — the asset is immutable per release.
+        Defaults to the bundled CyberPC Angel, LLC gears logo, self-hosted
+        so the brand mark needs no external CDN.  Operators can override it
+        with ``CVCPKG_SITE_LOGO``.  Cached — the asset is immutable for the
+        lifetime of the process.
         """
-        from cvcpkg.server.landing import brand_logo_bytes
+        from cvcpkg.server.landing import brand_logo_asset
 
-        data = brand_logo_bytes()
+        data, media_type = brand_logo_asset()
         if not data:
             raise HTTPException(status_code=404, detail="logo asset unavailable")
         return Response(
             content=data,
-            media_type="image/png",
+            media_type=media_type,
             headers={"Cache-Control": "public, max-age=86400"},
         )
 
