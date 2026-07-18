@@ -161,7 +161,7 @@ flowchart TD
 | 16 | Prefix Provenance & Server Seeding | ⬜ Planned — install prefixes carry catalog info + recipes in `share/cvcpkg/` so a prefix can seed a cvcpkg-server; org/private status explicit with warnings |
 | 17 | Recipe Archives — Declared Artifacts & Package-Page UX | ⬜ Planned — schema-declared recipe artifacts, full recipe directories on the server, downloadable recipe archives, collapsible artifact viewer, package-list layout rework |
 | 18 | Server Backups & Restore | ⬜ Planned — first-class recipe/package backup + restore commands, admin-managed scheduled backup jobs to the storage backends |
-| 19 | Application Packaging & Desktop Delivery | ⬜ Planned — recipe entry points, desktop assets, exe/MSI + AppImage + dmg installer commands from a prefix |
+| 19 | Application Packaging & Desktop Delivery | ⬜ Planned — recipe entry points, desktop assets, exe/MSI + AppImage + dmg installer commands from a prefix, self-mounting prefix capsule (feasibility: native per-OS mechanisms, no Docker) |
 | 20 | **PyPI Release** | ⬜ **Final phase** — the project/repo rename, trusted-publisher config, and the gated publish. Deliberately last: `pip install cvcpkg` ships only after the roadmap is otherwise complete. |
 
 **Road to PyPI (`pip install cvcpkg`):** the PyPI publish is the **last phase of the
@@ -1476,6 +1476,85 @@ platform.
       application's recipe.
 - [ ] **macOS** — a command to easily make a **dmg installer** from an
       install prefix.
+
+#### Self-mounting prefix capsule (feasibility)
+
+Research the feasibility of packaging an install prefix as a **single
+binary** that, when run, launches the user into a **shell with the entire
+install prefix mounted and available** — as a **user-mutable volume that
+unmounts when the main shell (or entry point) exits**.
+
+**Feasibility verdict (researched 2026-07-18): no Docker required — on any
+platform.**  On Linux everything needed is a plain unprivileged process
+using kernel features (user + mount namespaces, FUSE-in-userns since 4.18,
+unprivileged overlayfs since 5.11); Apptainer and NVIDIA enroot ship
+exactly this UX today with no daemon and no setuid.  On macOS and Windows,
+Docker is a Linux VM and could not even host a prefix of native binaries —
+the native mechanisms below are the only real options.  A container engine
+adds machinery without adding capability.
+
+Per-platform mechanism ladder (best first, detected at runtime):
+
+- **Linux** — launcher stub (static musl, embedded squashfuse/libfuse3 +
+  zstd) with the prefix appended as a squashfs image (the AppImage
+  type-2 runtime layout).  `unshare(CLONE_NEWUSER|CLONE_NEWNS)` →
+  squashfuse mounts the image as `lowerdir` → kernel **overlayfs upper
+  layer** for mutability (tmpfs by default; `--overlay DIR` for a
+  persistent layer) → exec the user's `$SHELL` with the prefix activated.
+  Teardown is a **kernel invariant**: when the last process in the mount
+  namespace exits — even on SIGKILL — the kernel destroys the namespace
+  and every mount in it; no cleanup code runs at all.  Fallback rungs:
+  fuse-overlayfs (kernels 4.18–5.10), plain FUSE mount with
+  `-o auto_unmount` (no userns), proot, and finally makeself-style
+  extract-and-run (no kernel features at all — the nix-portable-style
+  capability ladder).
+- **macOS** — launcher + appended read-only dmg;
+  `hdiutil attach -nobrowse -mountpoint … -shadow <file>` gives a
+  **natively copy-on-write, user-mutable volume** with no kext, no admin,
+  no macFUSE (rejected: kext/Reduced-Security friction on Apple Silicon).
+  The shadow file *is* the mutable layer: delete it to reset, keep it to
+  persist, `hdiutil convert -shadow` to commit.  Mounts outlive the
+  process, so the launcher needs a watchdog `hdiutil detach` plus a
+  stale-attachment sweep on start.
+- **Windows** — **no native, no-admin, writable mount path exists**
+  (VHDX attach is admin-only).  Default: self-extracting stub into a
+  content-addressed `%LOCALAPPDATA%` cache + spawned shell with the
+  prefix env, janitor cleanup for crashed sessions.  Optional: no-admin
+  **read-only ISO mount** (standard users since Windows 8) plus a scratch
+  dir; ProjFS / WinFsp modes only where pre-enabled (one-time admin).
+
+Feasibility work items:
+
+- [ ] **Prototype the Linux capsule** (userns + squashfuse + overlayfs;
+      prove the mount-namespace auto-teardown and the fallback ladder).
+- [ ] **Prototype the macOS capsule** (embedded dmg + `-shadow`
+      copy-on-write; watchdog detach + stale sweep).
+- [ ] **Prototype the Windows capsule** (SFX extract + cache + janitor;
+      evaluate the read-only ISO mount option).
+- [ ] **Decide the capsule format and command** (working name:
+      `cvcpkg seal <prefix>`): stub choice per platform — the Phase 8
+      `cvpkg` APE is the natural cross-platform stub *head* (note: the
+      cosmo `/zip/` VFS is in-process only — child processes can't see
+      it — so it carries the launcher, not the mount), payload
+      compression (xz/zlib/lz4/bzip2 recipes already build for the cosmo
+      platform; zstd would need a `build-cosmo.sh`), and the overlay
+      persistence/`reset`/`commit` UX shared across platforms.
+- [ ] **`squashfs-tools` recipe** — net-new; needed to build capsule
+      payloads from prefixes on the fleet.
+
+Prior art to steal from: **Apptainer** (`apptainer shell image.sif` —
+the exact UX, rootless since 1.1.0, `--writable-tmpfs`/`--overlay`),
+**AppImage type2-runtime** (static stub + appended-squashfs layout,
+`--appimage-extract-and-run` fallback), **enroot** (minimal
+namespaces-only philosophy), **nix-portable** (runtime capability
+ladder), **makeself** (universal floor).  Composes with: the AppImage
+item above (same payload tech), Phase 8's `cvpkg` APE (the portable
+stub), Phase 15's activation semantics (the capsule shell is `cvcpkg
+activate` applied to a mounted root) and prefix registry, Phase 16's
+provenance (catalog + recipes travel *inside* the capsule — and its
+private-org warning applies to sealing one), and Phase 15's air-gap
+story (a capsule is its logical endpoint: one file, no network, no
+unpack).
 
 ---
 
