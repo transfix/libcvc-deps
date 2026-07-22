@@ -631,8 +631,12 @@ def _check_conflicts(
 )
 @_config_opt
 @_link_opt
-@click.option("--catalog", metavar="URL", help="Override catalog URL or path to a local catalog YAML file.")
-@click.option("--catalog-revision", type=int, metavar="REV", help="Pin to a specific catalog revision number.")
+@click.option(
+    "--catalog", metavar="URL", help="Override catalog URL or path to a local catalog YAML file."
+)
+@click.option(
+    "--catalog-revision", type=int, metavar="REV", help="Pin to a specific catalog revision number."
+)
 @click.option(
     "--source",
     type=click.Choice(["auto", "server", "github"], case_sensitive=False),
@@ -745,7 +749,9 @@ def install_deps(
         click.echo(f"cvcpkg: {r.name} declares no build/runtime deps for {plat} — nothing to do.")
         return
 
-    click.echo(f"cvcpkg: install-deps {r.name} → {len(names_sorted)} deps: {' '.join(names_sorted)}")
+    click.echo(
+        f"cvcpkg: install-deps {r.name} → {len(names_sorted)} deps: {' '.join(names_sorted)}"
+    )
 
     # Reuse the full 'install' resolution/installation path with the recipe's
     # deps as the component set.
