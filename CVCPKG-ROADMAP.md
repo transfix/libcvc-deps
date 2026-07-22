@@ -1689,7 +1689,7 @@ the terminal experience worthy of the web front end.
       supported model: a project carries its recipes and the related
       scripts/media as part of its source tree, exactly like this repo's
       `recipes/` directory (composes with Phase 17's declared artifacts).
-- [ ] **`cvcpkg validate` accepts an arbitrary set of recipe
+- [x] **`cvcpkg validate` accepts an arbitrary set of recipe
       directories.**  Today `validate` takes only a fixed keyword
       `TARGET` (`all | components | recipes | recipes/<name>`), carries
       no `--recipes-dir` overlay, and delegates in-process to
