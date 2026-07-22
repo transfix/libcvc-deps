@@ -711,8 +711,10 @@ def install_deps(
     flags mirror 'cvcpkg install' and are forwarded to it.
 
     \b
-    Example:
+    Example — install libcvc's deps, then build libcvc against them:
       cvcpkg install-deps cvcpkg/recipes/libcvc --prefix ./deps --config release
+      cvcpkg build libcvc --recipes-dir cvcpkg/recipes --no-deps --prefix ./deps
+      # (or drive CMake directly: -DCMAKE_PREFIX_PATH=$PWD/deps)
     """
     from cvcpkg.builder import Recipe, _dep_names_for_role, find_recipes_dir
     from cvcpkg.platform import detect_platform
