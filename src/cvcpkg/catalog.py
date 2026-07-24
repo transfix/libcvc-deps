@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """Fetch, parse, and generate the libcvc-deps bundle catalog."""
 
 from __future__ import annotations
@@ -225,6 +228,8 @@ def catalog_entries(
                 key_fingerprint=b.get("key_fingerprint", ""),
                 upstream_yanked=bool(b.get("upstream_yanked", False)),
                 org=b.get("org", ""),
+                provides=b.get("provides", []),
+                requires_capabilities=b.get("requires_capabilities", []),
             )
         )
     return entries

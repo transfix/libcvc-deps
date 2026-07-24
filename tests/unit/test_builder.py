@@ -28,7 +28,7 @@ from cvcpkg.builder import (
     _file_list,
     _find_patchelf,
     _is_any_recipe,
-    _patch_linux_rpath,
+    _patch_elf_rpath,
     _select_matrix_entry,
     _sha256_file,
     _source_cache_dir,
@@ -1935,8 +1935,8 @@ class TestFindPatchelf:
             assert _find_patchelf(tmp_path / "absent") is None
 
 
-class TestPatchLinuxRpath:
-    """_patch_linux_rpath uses the supplied patchelf, not the system one."""
+class TestPatchElfRpath:
+    """_patch_elf_rpath uses the supplied patchelf, not the system one."""
 
     def test_uses_given_patchelf(self, tmp_path):
         lib = tmp_path / "install" / "lib"
@@ -1953,7 +1953,7 @@ class TestPatchLinuxRpath:
             patch("cvcpkg.builder.subprocess.run", side_effect=fake_run),
             patch("cvcpkg.builder.shutil.which", side_effect=AssertionError("system PATH used")),
         ):
-            _patch_linux_rpath(tmp_path / "install", "/opt/cvcpkg/bin/patchelf")
+            _patch_elf_rpath(tmp_path / "install", "/opt/cvcpkg/bin/patchelf")
 
         assert calls, "patchelf was not invoked"
         assert all(c[0] == "/opt/cvcpkg/bin/patchelf" for c in calls)
@@ -1968,14 +1968,14 @@ class TestPatchLinuxRpath:
             patch("cvcpkg.builder.shutil.which", return_value=None) as which,
             patch("cvcpkg.builder.subprocess.run") as run,
         ):
-            _patch_linux_rpath(tmp_path / "install", None)
+            _patch_elf_rpath(tmp_path / "install", None)
         which.assert_called_once_with("patchelf")
         run.assert_not_called()  # no patchelf resolved -> nothing to do
 
     def test_no_lib_dir_is_noop(self, tmp_path):
         (tmp_path / "install").mkdir()
         with patch("cvcpkg.builder.subprocess.run") as run:
-            _patch_linux_rpath(tmp_path / "install", "/opt/cvcpkg/bin/patchelf")
+            _patch_elf_rpath(tmp_path / "install", "/opt/cvcpkg/bin/patchelf")
         run.assert_not_called()
 
 

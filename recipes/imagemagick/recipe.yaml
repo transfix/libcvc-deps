@@ -2,7 +2,37 @@ schema_version: 1
 recipe:
   name: imagemagick
   upstream_version: "7.1.1"
-  cvc_revision: 6
+  # Bumped 6 -> 7 to republish the macOS bundle with @rpath install names (the
+  # autotools/libtool build baked an absolute build-temp install_name into
+  # libMagick++, breaking dyld for consumers — see libcvc-deps#345). The fix
+  # (_patch_macos_install_names) only rewrites NEWLY built bundles, and the
+  # macos-arm64 +cvc.6 bundle is immutable, so a revision bump is required for
+  # the corrected bundle to publish and be picked up by libcvc's macOS CI.
+  #
+  # Bumped 7 -> 8: build against the cvcpkg libxml2 (2.12.9, FTP client removed
+  # in 2.11) instead of the build host's system libxml2 (still has FTP).
+  # ImageMagick REQUIRES libxml2 (it parses its own delegates.xml/type.xml config
+  # at runtime), and configure previously auto-detected the SYSTEM libxml2 — so
+  # MagickCore baked in xmlNanoFTP* symbols the cvcpkg libxml2 no longer exports,
+  # breaking every consumer's link (libcvc: undefined reference to
+  # xmlNanoFTPClose@LIBXML2_2.4.30). Now declares libxml2 and points configure at
+  # it (see build.sh). The +cvc.7 bundle is immutable, so republishing needs +cvc.8.
+  #
+  # Bumped 8 -> 9: enable the full image-codec delegate set. +cvc.8 shipped a
+  # minimal build (fontconfig/freetype/lzma/tiff/xml/zlib/zstd — no jpeg/png/webp)
+  # because the recipe passed --without-jpeg/png/webp. Now builds with jpeg, png,
+  # webp, tiff, zstd, lzma and bzlib ON, with each codec declared so the exposed
+  # cvcpkg prefix is a complete link closure (this is also what puts -ljpeg/-lwebp
+  # on the link line, resolving both MagickCore's coders and libtiff's codec refs).
+  #
+  # Bumped 9 -> 10: fix the hermetic link. cvc.9 RELEASE published but the DEBUG
+  # fleet build failed with `undefined reference to SharpYuvInit / ZSTD_decompress`
+  # — MagickCore references those directly but they are only *private* pkg-config
+  # deps of the cvcpkg libwebp/libtiff (Requires.private), which a dynamic
+  # `pkg-config --libs` drops. build.sh now links -lsharpyuv/-lzstd/-lLerc via
+  # $LIBS. (cvc.9 release linked only because that fleet job happened to see a
+  # system libwebp bundling sharpyuv; not reproducible/portable.)
+  cvc_revision: 10
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -23,11 +53,40 @@ depends:
   build:
     - cmake
     - ninja
-  runtime:
+    # Full delegate set — a hermetic ImageMagick built entirely against cvcpkg
+    # codecs (no fall-through to the build host's system libraries). build.sh
+    # exposes the deps prefix and enables each delegate (--with-jpeg/png/webp/…);
+    # declaring the libs here puts them in the prefix so both ImageMagick's own
+    # coders AND libtiff's codec references resolve at link time. (The earlier
+    # jpeg_std_error / ZSTD_* link failures were exactly this: libtiff pulled in
+    # jpeg/zstd but they were --without / undeclared, so nothing put -ljpeg
+    # -lzstd on the link line.) cvcpkg resolves each dep's own transitive closure
+    # (e.g. freetype→brotli/png, fontconfig→expat) into the prefix automatically.
     - name: zlib
       version: "^1.3"
+    - name: bzip2
     - name: tiff
       version: "^4.6"
+    - name: libjpeg-turbo
+      version: "^3.1"
+    - name: libpng
+    - name: libwebp
+      version: "^1.5"
+    - name: xz
+      version: "^5.6"
+    - name: zstd
+      version: "^1.5"
+    - name: lerc
+    # (freetype/fontconfig are auto-detected from the builder as in +cvc.8; not
+    # declared here to avoid dragging in their heavy build closure — python3 via
+    # meson, expat, brotli — for a text-rendering delegate the image pipeline
+    # does not need. Enable them hermetically in a later revision if wanted.)
+    # ImageMagick links libxml2 (config-file parsing) and ships referencing it.
+    # Pinned to the cvcpkg 2.12.x bundle, which has the FTP client removed — so
+    # MagickCore never references xmlNanoFTP*. build.sh forces configure to use
+    # THIS libxml2 rather than the build host's system one.
+    - name: libxml2
+      version: "^2.12"
   host_tools: []
 
 build:

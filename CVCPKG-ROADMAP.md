@@ -42,36 +42,45 @@ project is being set to **CyberPC Angel, LLC**.  This effort is sequenced
 alongside the rename and the org move below, and lands **before** the Phase 25
 PyPI publish so the first public release carries the correct ownership.
 
-- [ ] **Copyright & provenance branding sweep → CyberPC Angel, LLC.**  Set
-      the owning entity to CyberPC Angel, LLC everywhere provenance is
-      asserted: `pyproject.toml` (`authors`, `homepage`/`repository`),
-      `README.md`, the server landing-page footer (currently
-      `cvcpkg — cross-platform binary package archive…`, no owner), the docs,
-      and the GitHub repo metadata/social preview.  *(The `LICENSE` file
-      already carries `Copyright (c) 2026 CyberPC Angel, LLC` — this
-      generalizes that to the rest of the project.)*
+- [x] **Copyright & provenance branding sweep → CyberPC Angel, LLC.**  Set
+      the owning entity to CyberPC Angel, LLC everywhere copyright/IP
+      ownership is asserted: `README.md`'s License section, the server
+      landing-page footer (currently
+      `cvcpkg — cross-platform binary package archive…`, no owner), and the
+      `cvcpkg --help` text.  *(The `LICENSE` file already carries
+      `Copyright (c) 2026 CyberPC Angel, LLC` — this generalizes that to the
+      rest of the project.)*  `pyproject.toml` `authors` stays `cvcpkg group
+      <info@cvcpkg.org>` — that field names the group that operates/
+      maintains the package, a distinct entity from CyberPC Angel, LLC,
+      which owns the underlying IP/copyright.  `pyproject.toml`
+      `homepage`/`repository` and the GitHub repo metadata/social preview
+      still point at `transfix/libcvc-deps` — those flip together with the
+      org move below, not before it exists.
   - **Do not rewrite per-recipe `maintainer` / `maintainer_email` fields.**
     Those name the **upstream package** maintainers (e.g. the zlib or boost
     packager), not cvcpkg's owner — they are legitimate third-party
     attribution and must survive the sweep untouched.
-- [ ] **Source-file headers (bonus).**  Add a CyberPC Angel, LLC copyright +
+- [x] **Source-file headers (bonus).**  Add a CyberPC Angel, LLC copyright +
       MIT notice header to every first-party source file — recommended form
       is an SPDX one-liner so it stays greppable and tooling-friendly:
       `# SPDX-License-Identifier: MIT` + `# Copyright (c) 2026 CyberPC Angel,
-      LLC`.  Today **0 of 93** first-party Python files carry any
-      copyright/license header, so this is a green-field sweep (a
-      `scripts/apply_headers.py` + a CI check to keep new files compliant).
-      Exclude vendored `third-party/` and per-recipe upstream sources.
-- [ ] **ASCII-art gears logo (double bonus).**  Add an ASCII-art rendition of
+      LLC`.  Landed via `scripts/apply_headers.py` (`--check` wired into the
+      `lint` job in `cvcpkg-ci.yml`) across all 97 first-party Python files
+      under `src/cvcpkg/`.  Excludes vendored `third-party/` and per-recipe
+      upstream sources.
+- [x] **ASCII-art gears logo (double bonus).**  Add an ASCII-art rendition of
       the CyberPC Angel, LLC **gears** logo to the source tree (e.g. a banner
       comment / the `cvcpkg` `--version` or no-arg splash) and to the top of
       `README.md`.  Keep it plain 7-bit ASCII so it renders in any terminal
-      and in the `landing.py` guide.
-- [ ] **Project logo = CyberPC Angel gears icon.**  Use the CyberPC Angel,
+      and in the `landing.py` guide.  *(Shipped in #303 — `branding.py`.)*
+- [x] **Project logo = CyberPC Angel gears icon.**  Use the CyberPC Angel,
       LLC gears icon as the project logo: a **favicon** and `og:image` on the
       server landing page (it has **neither** today — see `_head_html`), a
       logo in the README header, and the GitHub repo social-preview image.
       Ship the asset self-hosted (no external CDN) consistent with the CSP.
+      *(Shipped in #303 — favicon/`og:image`/README header; the GitHub
+      repo social-preview image itself is a repo-settings upload, still
+      open.)*
 - [ ] **New GitHub organization for the CyberPC Angel team; cvcpkg lives
       under it.**  Create a dedicated **CyberPC Angel** GitHub org (slug TBD,
       e.g. `cyberpcangel`) and move cvcpkg into it.  This **changes the
@@ -253,6 +262,8 @@ flowchart TD
 | 17 | Recipe Archives — Declared Artifacts & Package-Page UX | ⬜ Planned — schema-declared recipe artifacts, full recipe directories on the server, downloadable recipe archives, collapsible artifact viewer, package-list layout rework |
 | 18 | Server Backups, Scheduled Jobs & Quota Governance | ⬜ Planned — recipe/package backup + restore; a general admin job manager + scheduler (none exists today); quota governance (global default → infinite, reconciliation job, recipes count against org quota) |
 | 19 | Application Packaging & Desktop Delivery | ⬜ Planned — recipe entry points, desktop assets, exe/MSI + AppImage + dmg installer commands from a prefix, `cvcpkg bake` self-mounting prefix binaries (feasibility: native per-OS mechanisms + persistent state layers + cosmo APE variant, no Docker) |
+
+> **Embedded-Python single binaries (proposed):** ship a CPython interpreter with native C-extension modules (e.g. `vtk-python`) statically linked into one `bake` artifact — a Cosmopolitan APE (headless libcvc+vtk data/DSL) or a `.wasm` (browser VolRover with an embedded interpreter). See [`docs/roadmap/static-single-binary-python.md`](docs/roadmap/static-single-binary-python.md).
 | 20 | First-Party & Featured Software Recipes | ⬜ Planned — org namespaces `cypca` (eiskaltdcpp, eiskaltdcpp-py, verlihub), `cvc` (TexMol alongside libcvc/volrover), `tfx` (ezquake); SDL2/SDL3 across platforms + satellites; the wheel recipes needed to self-host cvcpkg |
 | 21 | Package Visibility — Hidden Packages | ⬜ Planned — discoverability-only suppression (a third axis beside `yanked` and org `is_private`); upstream is authoritative; propagation through mirror + populate |
 | 22 | Federation Topology — Nested Authority & Network Introspection | ⬜ Planned — N-tier edge→mid→root authority, cross-tier consistency warnings, same-org override, permission-gated network statistics |
@@ -300,6 +311,8 @@ name-claiming, community-facing commitment, so it comes at the very end.
 - [x] Mirror protocol (pkg.tx.wtf mirrors cvcpkg.org with sync loop)
 
 ### Phase 1.5 — Release Engineering Readiness
+
+> **Native toolchain hermeticity (proposed):** recipes currently compile with the build box's system `gcc`/`g++` (`env-linux.sh: CXX=${CXX:-g++}`), so binaries drift between environments (e.g. fleet GCC 11 vs a dev box's GCC 13 — the exact issue that blocked publishing a local `vtk-python` against the fleet's `vtk`). Pin a native C/C++ toolchain like we already do for WASM/Haskell/Python. See [`docs/roadmap/hermetic-native-toolchain.md`](docs/roadmap/hermetic-native-toolchain.md).
 
 **Status: Complete**
 
@@ -685,6 +698,29 @@ scaling and federation:
   *updates* (a re-published public variant, same key, new content) and
   multi-upstream fan-in are future work; the invariants above keep the public
   catalog safe in the meantime.
+- **Multi-tenant / shared builder fleet** — today the scheduler enforces strict
+  1:1 org isolation (`_choose_builder` in `server/app.py` skips any builder whose
+  `org_slug` differs from the job's, and a builder registers with a single
+  `--org`), so each machine is bound to exactly one namespace — the CVC dev
+  cluster can't use the *same* builders for public packages and `cvc`-org
+  packages. Keep the **package** namespaces separate (the invariants above) while
+  **pooling the builder fleet across them**:
+  - A builder advertises a SET of served namespaces instead of one `org_slug` —
+    e.g. `["", "cvc", "cypca"]` (the public namespace **plus** two orgs); the
+    scheduler matches a job to any builder whose served set contains the job's
+    `org_slug`. So dedicated org builders can also take public jobs, and one
+    machine can serve several groups at once.
+  - **Multi-server** — a builder can register with and poll more than one cvcpkg
+    server, so a single fleet serves multiple registries/groups (e.g. the primary
+    `cvcpkg.org` for public work and an org's edge cluster for its private work).
+  - **Isolation preserved** — pooling *execution* must not pool *secrets*: an
+    org's private sources/tokens and a job's build outputs are scoped per job, so
+    a builder that runs a `cvc` job then a public job never leaks one into the
+    other. The catalog invariants are unchanged (org packages never populate or
+    shadow the public namespace) — only build execution is shared.
+
+  Composes with the build-time capability routing (GPU/`cuda`) item: a job is
+  matched on (platform, arch, required capabilities, **served org/server**).
 - **Mirror protocol** — institutions can run local read-only mirrors
   (`--mirror-mode`) that sync from a primary. Useful for pure read-only
   air-gapped caches; the read-write variant is the *edge* role above.
@@ -865,6 +901,30 @@ the NVIDIA redistributable math libs (download `.tar.xz`, sha256-verify, generat
 Highest cross-value is `cufft` (F2Dock's FFT-correlation docking; `libcufftw` is a near drop-in for
 the existing `fftw3` recipe), then `cublas`/`cusolver`/`cusparse` for volrover/MolSurf dense &
 sparse solves.
+
+**Planned: GPU/CUDA build-time routing (scheduler capability).** The CUDA-math recipes above — and
+`libcvc-cuda` (recipe `requires_capabilities: [cuda]`) — must build on a host with an NVIDIA GPU +
+`nvcc`, never on the CPU builders (`star-00`/`star-01`). Today the scheduler's `_choose_builder`
+(`src/cvcpkg/server/app.py`) matches only `(platform, arch)` and the `cross_platforms` capability
+(wasm), so a CUDA build would wrongly land on any linux builder and fail on the missing toolchain.
+Add **build-time capability routing** — the build-side twin of the install-side capability selection
+(`requires_capabilities`/`provides` in the resolver):
+- A builder advertises capabilities at registration — `cvcpkg builder run --capability cuda`, plus
+  auto-detect via `nvidia-smi`/`nvcc`/`libcuda` — surfacing as `capabilities: {"cuda": true}` (stored
+  alongside the existing `cross_platforms`).
+- A recipe's top-level `requires_capabilities` propagates onto its build jobs (new `required_capabilities`
+  field end to end: submit-dag → job model/DB + migration → store).
+- `_choose_builder` skips any builder whose advertised capabilities don't satisfy **all** of a job's
+  `required_capabilities`; the unschedulable-reaper marks a job whose required capability is advertised
+  by no registered builder as unschedulable, rather than dispatching it to a builder where it would
+  fail on the missing toolchain.
+- Generalizes beyond CUDA (e.g. `avx512`, a specific driver/SDK) exactly as `cross_platforms` did for
+  wasm.
+
+First GPU builder: **`prettyhatemachine`** (NVIDIA GTX 1650 + CUDA 12.x); provisioning script +
+fleet docs land in `vm-provisioning` (`linux/setup-cuda-builder.sh`, `docs/CVCPKG-BUILDERS.md`). This
+routing is a prerequisite for building both the CUDA-math recipes above and the `libcvc-cuda` package
+on the fleet.
 
 #### Per-Interpreter Wheel Matrix (incl. Free-Threaded / No-GIL)
 
@@ -1361,6 +1421,61 @@ With `numpy`, `scipy`, and `F2Dock` all declaring `depends: [blas, lapack]`:
 - **Older x86-64 without AVX2:** mkl/blis pruned by `requires_isa` → **openblas** (the portable
   default always survives).
 
+#### Worked example — the libcvc CUDA variants (`libcvc-cuda`, `pycvc-cuda`, …)
+
+The same machinery selects the **CUDA/GPU build** of the CVC stack. Here the "peers" are not rival
+implementations of one library but the **same package built two ways** — a CPU build and a GPU
+build — gated on a **GPU** capability rather than a CPU ISA.
+
+Where CUDA lives, and which packages need a `-cuda` peer:
+
+- **`libcvc` / `libcvc-cuda`** — all CUDA code lives in libcvc *core* (`voxels_kernels.cu` +
+  `#ifdef CVC_USING_CUDA` in the volume headers). `CVC_USING_CUDA` is a **`PUBLIC` compile
+  definition on `cvc::cvc`**, so everything that links libcvc inherits it. Both recipes
+  `provides: [libcvc]`; `libcvc-cuda` adds `requires_capabilities: [cuda]`.
+- **`pycvc` / `pycvc-cuda`** — the SWIG bindings compile `pycvc_volume.cpp`, whose
+  `on_gpu()`/`cuda_ptr()`/`enable_cuda()` bodies are `#ifdef CVC_USING_CUDA` (real device pointers
+  vs host stubs). Built against `libcvc-cuda` the GPU bodies compile in; the public Python API is
+  identical. Same slot (`provides: [pycvc]`, `requires_capabilities: [cuda]`).
+- **`pycvc-gl` / `pycvc-gl-cuda`** — the scene bindings also compile `pycvc_volume.cpp`, so they
+  are variant-dependent for the same reason.
+- **`cvcgl`** — the C++ scene-graph library has **no CUDA code of its own**; it only links
+  `cvc::cvc`. It should ideally be a **single package** used with either libcvc variant (see the ABI
+  note).
+
+**Rule.** cvcpkg ships prebuilt bundles keyed by `(name, platform, config, link)` with **no CUDA
+axis**, so a `-cuda` peer (a distinct bundle) is needed for exactly those packages whose *compiled
+output* changes when `CVC_USING_CUDA` flips: `libcvc` (kernels), `pycvc` and `pycvc-gl` (the
+`#ifdef` facade bodies). A package with no CUDA-gated code needs **no** peer — *provided the libcvc
+ABI it consumes is identical in both variants* (next paragraph).
+
+**ABI-peer requirement (a real gotcha).** Phase 10 requires peers to honour one ABI contract. The
+CUDA switch currently **violates it**: `voxels`'s last member is `#ifdef CVC_USING_CUDA
+std::shared_ptr<void> _cuda_unified_ptr; #else void* …`, so `sizeof(voxels)` differs by 8 bytes
+between the CPU and GPU builds, which shifts `cvc::volume::_boundingBox` — read by cvcGL through the
+**inline** `boundingBox()`. So a CPU-built `cvcgl` is **not** ABI-compatible with `libcvc-cuda`. Two
+ways to satisfy the peer contract:
+  1. **Make `cvc::volume`'s ABI variant-invariant** — always reserve the `shared_ptr<void>` slot,
+     even in host-only builds (it stays empty). Then the CPU and GPU libcvc are true ABI peers,
+     `cvcgl` (and volrover3, any pure-C++ consumer) stays a **single package**, and only the
+     CUDA-code-bearing packages (`libcvc`, `pycvc`, `pycvc-gl`) get `-cuda` peers. **Recommended.**
+  2. Rebuild every C++ consumer per variant (`cvcgl-cuda`, …) purely to match the ABI —
+     combinatorial; avoid.
+
+**Today (pre–Phase 10).** `libcvc-cuda` and `pycvc-cuda` exist with `provides:` +
+`requires_capabilities: [cuda]`, and the CPU recipes now declare their `provides:` slot. But nothing
+reads `requires_capabilities` at resolve time and there is no GPU probe (the field currently only
+influences *builder* scheduling), so the `-cuda` variants are **installed explicitly** on GPU hosts.
+`pycvc-gl-cuda` is deferred pending resolution (1) so it can keep the single `cvcgl`.
+
+**After Phase 10.** A `capabilities/cuda.yaml` gates providers on the HardwareProfile's
+`gpu: {vendor: nvidia, arch}` (the profile already carries `gpu`) — the GPU analogue of
+`requires_isa`. Consumers depend on the **virtual** `libcvc` / `pycvc` / `pycvc-gl`; on an NVIDIA
+host the solver concretizes each to its `-cuda` peer (mutex-exclusive with the CPU build), on any
+other host to the CPU build. `--provider libcvc=libcvc-cuda` and `--hardware-profile` force or
+cross-target it, exactly like BLAS. With resolution (1) done, GPU selection touches only
+`libcvc`/`pycvc`/`pycvc-gl`; `cvcgl` is built once and works with both.
+
 #### Composition with the rest of the roadmap
 
 - **Phase 7 (Python).** A numpy/scipy `python_sdist` that `depends: [blas]` builds against whichever
@@ -1587,36 +1702,54 @@ the terminal experience worthy of the web front end.
       supported model: a project carries its recipes and the related
       scripts/media as part of its source tree, exactly like this repo's
       `recipes/` directory (composes with Phase 17's declared artifacts).
-- [ ] **`cvcpkg validate` accepts an arbitrary set of recipe
-      directories.**  Today `validate` takes only a fixed keyword
-      `TARGET` (`all | components | recipes | recipes/<name>`), carries
-      no `--recipes-dir` overlay, and delegates in-process to
-      `packaging/validate.py`, which hard-wires the recipe root to a
-      libcvc-deps checkout — so it errors with "cannot find
-      packaging/validate.py -- run from the libcvc-deps repo root"
-      anywhere else, and the validator plus its JSON schemas ship only
-      in this repo, never in the pip-installed `cvcpkg`.  A project
-      therefore cannot validate its own `cvcpkg/recipes/<name>/` in its
-      own CI without checking out libcvc-deps and co-locating the recipe
-      under `recipes/` — the very co-location the ownership policy
-      forbids
-      ([docs/recipe-authoring.md](docs/recipe-authoring.md#recipe-ownership--where-a-recipe-lives)).
-      Give `validate` the same recipe surface as `build`/`pack`:
-      repeatable `--recipes-dir` plus a path `TARGET` (a single
-      recipe dir or a whole `recipes/` dir), validated over the merged
-      set with later-dir-wins, and move the checking logic + schemas
-      into the installed package (loaded via `importlib.resources`,
-      dropping the `packaging/validate.py` walk-up) so it runs from any
-      repo's CI (composes with the `--recipes-dir` overlay and this
-      phase's `CVCPKG_RECIPES_PATH` discovery).  Acceptance: in a clean
-      venv with only `pip install cvcpkg` and no libcvc-deps checkout,
-      `cvcpkg validate ./cvcpkg/recipes/libcvc` and `cvcpkg validate
-      --recipes-dir cvcpkg/recipes --recipes-dir ../shared/recipes` each
-      validate the given dir(s) — schema, build-script/patch existence,
-      minted-version order, and cross-recipe missing-dependency — and
-      exit nonzero on any error; `--no-default-recipes` restricts to the
-      given dirs; and the existing keyword targets plus `python
-      packaging/validate.py` keep working unchanged for this repo's CI.
+- [x] ~~**`cvcpkg validate` accepts an arbitrary set of recipe
+      directories.**~~ — ✅ **Done** (#349). The checking logic and the
+      JSON schemas moved **into the installed package** (`cvcpkg/validation.py`
+      + `cvcpkg/schemas/`, loaded via `importlib.resources`), so `validate` no
+      longer walks up to a libcvc-deps checkout and now runs from any repo's CI
+      with `pip install cvcpkg` alone. `validate` gained the same recipe surface
+      as `build`/`pack`: repeatable `--recipes-dir` (merged, later-dir-wins),
+      `--no-default-recipes`, and a path `TARGET` — a single recipe dir or a
+      whole `recipes/` dir — alongside the existing keyword targets. It checks
+      schema, build-script/patch existence, minted-version order, and
+      **cross-recipe missing-dependency** over the merged set (a name must be a
+      recipe or a `provides` slot; a single-recipe path also resolves its
+      siblings). `packaging/validate.py` is now a thin shim over
+      `cvcpkg.validation`, so `python packaging/validate.py [target]` keeps
+      working for this repo's CI. Acceptance met: in a clean venv,
+      `cvcpkg validate ./cvcpkg/recipes/libcvc` and
+      `cvcpkg validate --recipes-dir cvcpkg/recipes --recipes-dir ../shared/recipes`
+      each validate the given dir(s) and exit nonzero on any error. Composes
+      with `--recipes-dir` today and with the `CVCPKG_RECIPES_PATH` discovery
+      once that lands. It immediately caught real defects that had been
+      unvalidatable in downstream libcvc: `-cuda` recipes using
+      `requires_capabilities` (a fully-wired field the recipe schema rejected —
+      now added) and three `-cuda` recipes declaring build scripts that did not
+      exist.
+- [ ] **`cvcpkg build` prefers prebuilt dependency bundles by default.**
+      Today `build` resolves the target's dependency closure and rebuilds
+      **all of it from source** (`--with-deps`, the default) — so building one
+      recipe recompiles cmake, zlib, perl, openssl, … from scratch even though
+      every one is already published on cvcpkg.org.  The only escape is the
+      two-step `cvcpkg install <deps>` (fetch prebuilt) **+**
+      `cvcpkg build <recipe> --no-deps` (compile just the target against the
+      installed prefix) — non-obvious, and easy to forget, so users sit through
+      a full source rebuild of the world for a one-line recipe change.
+      Invert the default: `build` should **install prebuilt bundles for every
+      dependency available upstream** (honouring `--platform`/`--config`/
+      `--link`/version constraints) and build **only** the requested recipe(s)
+      from source; a dependency is built from source **only** when no matching
+      bundle exists upstream **or** the client is offline/`--local` — a natural
+      fallback to the available recipes, no flag required.  Add an opt-in
+      `--build-deps-from-source` (name TBD) for the current "recompile the whole
+      closure" behaviour (reproducibility, bisecting a dep, a locally-patched
+      recipe), and make `--no-deps` continue to mean "assume deps are already in
+      `--prefix`".  Acceptance: `cvcpkg build imagemagick --prefix ./p` on a box
+      with network access fetches the jpeg/png/tiff/… bundles and compiles only
+      ImageMagick (seconds-to-minutes, not the from-source closure); with
+      `--local` or no network it transparently builds the deps it cannot fetch;
+      `--build-deps-from-source` reproduces today's behaviour.  This is the
+      single biggest day-to-day friction in the `build` UX.
 - [ ] **Developer loop for downstream users** — an easy workflow to do a
       local build of a project, debug it, and generate + add recipe patches
       (`cvcpkg`-assisted patch generation rather than hand-maintained diffs).

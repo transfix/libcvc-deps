@@ -1,0 +1,415 @@
+# JSON-Schema (expressed in YAML) for recipes/<component>/recipe.yaml.
+#
+# See docs/roadmap/split-distribution.md §7.2 for the full
+# specification of the recipe format.
+
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "https://transfix.github.io/libcvc-deps/schemas/recipe-v1.yaml"
+title: "libcvc-deps build recipe"
+description: >
+  Self-contained recipe that fully describes how to build one
+  component of libcvc-deps from upstream sources.
+
+type: object
+required: [schema_version, recipe, source, build, package]
+additionalProperties: false
+
+properties:
+  schema_version:
+    type: integer
+    const: 1
+
+  recipe:
+    $ref: "#/$defs/recipe_block"
+
+  source:
+    $ref: "#/$defs/source_block"
+
+  patches:
+    type: array
+    items: { type: string }
+    description: "Patch files applied in order with patch -p1"
+
+  depends:
+    $ref: "#/$defs/depends_block"
+
+  build:
+    $ref: "#/$defs/build_block"
+
+  package:
+    $ref: "#/$defs/package_block"
+
+  test:
+    $ref: "#/$defs/test_block"
+
+  abi:
+    $ref: "#/$defs/abi_block"
+
+  python:
+    $ref: "#/$defs/python_block"
+
+  notes:
+    oneOf:
+      - type: string
+      - type: array
+        items:
+          type: object
+    description: "Human-readable build notes or special instructions"
+
+  conflicts:
+    type: array
+    items:
+      type: string
+      pattern: "^[a-z][a-z0-9-]*$"
+    description: >
+      Packages that cannot be installed in the same prefix as this one.
+      The conflict is checked before installation; the user is told to
+      uninstall the conflicting package first.  Must be declared
+      symmetrically (each conflicting pair lists the other) — a one-sided
+      declaration only fires in one direction, since the check loads the
+      recipes of the packages being installed.  Symmetry is enforced by
+      tests.  For a mutually exclusive *group*, prefer `provides` below,
+      which cannot be asymmetric.
+
+  provides:
+    type: array
+    items:
+      type: string
+      # Slots are a virtual namespace, not package names, so a dot is allowed
+      # — version-bearing slots like `cpython-3.13` are the common case.
+      pattern: "^[a-z][a-z0-9.-]*$"
+    description: >
+      Virtual slots this package fills, e.g. `cpython-3.13`.  Every package
+      providing a slot is mutually exclusive with every other provider of
+      that slot, so a group of n alternatives needs n declarations rather
+      than the n*(n-1) pairwise `conflicts` entries — and the exclusion is
+      symmetric by construction.  Use this when several packages install
+      the same files (a clobber) or are otherwise interchangeable.
+
+  requires_capabilities:
+    type: array
+    items:
+      type: string
+      pattern: "^[a-z][a-z0-9-]*$"
+    description: >
+      Host capabilities this package's build/runtime requires, e.g. `cuda`.
+      The resolver only selects a candidate whose `requires_capabilities` are a
+      subset of the host's probed capabilities, and (among a `provides` group)
+      prefers the candidate requiring the most — so a `-cuda` variant that
+      `provides` the same slot as its CPU peer wins on a CUDA host and is
+      filtered out elsewhere.  See platform capability probing / resolver.
+
+  cross_toolchain:
+    $ref: "#/$defs/cross_toolchain_block"
+
+  toolchain:
+    oneOf:
+      - type: string
+      - type: object
+    description: "Toolchain requirements (e.g. cmake, autotools, meson)"
+
+$defs:
+  recipe_block:
+    type: object
+    required: [name, upstream_version, cvc_revision]
+    additionalProperties: false
+    properties:
+      name:
+        type: string
+        pattern: "^[a-z][a-z0-9-]*$"
+      upstream_version:
+        type: string
+      cvc_revision:
+        type: integer
+        minimum: 1
+      kind:
+        type: string
+        enum: [data, media, config, iso]
+        description: >
+          Optional content hint for platform-independent recipes, emitted
+          verbatim as `meta.kind` in the manifest for downstream tooling.
+      maintainer:
+        type: string
+      maintainer_email:
+        type: string
+      maintainer_url:
+        type: string
+        format: uri
+      description:
+        type: string
+        description: "Short human-readable description of the component"
+      homepage:
+        type: string
+        format: uri
+      license:
+        type: string
+        description: "SPDX license expression"
+      tags:
+        type: array
+        items:
+          type: string
+          pattern: "^[a-z][a-z0-9-]*$"
+        description: "Category tags (e.g. math, graphics, utils, networking)"
+
+  source_block:
+    type: object
+    required: [type]
+    additionalProperties: false
+    properties:
+      type:
+        type: string
+        enum:
+          [
+            tarball,
+            git,
+            vcpkg,
+            brew,
+            apt,
+            vendored,
+            prebuilt,
+            python_wheel,
+            python_sdist,
+          ]
+      url:
+        type: string
+        format: uri
+      mirror:
+        type: string
+        format: uri
+        description: "Fallback mirror URL"
+      sha256:
+        type: string
+        pattern: "^[0-9a-f]{64}$"
+      path:
+        type: string
+        description: "Relative path to vendored source tree"
+      strip_components:
+        type: integer
+        minimum: 0
+      commit:
+        type: string
+        pattern: "^[0-9a-f]{40}$"
+        description: "Full 40-char SHA for git sources"
+      submodules:
+        type: boolean
+      port:
+        type: string
+        description: "vcpkg port name"
+      triplet:
+        type: string
+        description: "vcpkg triplet"
+      baseline:
+        type: string
+        description: "vcpkg baseline pin"
+      base_url:
+        type: string
+        format: uri
+        description: "Base URL for prebuilt artifact downloads"
+      artifacts:
+        type: object
+        additionalProperties:
+          oneOf:
+            - type: string
+            - type: object
+              additionalProperties: { type: string }
+        description: "Platform-keyed map of prebuilt artifact filenames and checksums"
+
+  python_block:
+    type: object
+    required: [interpreter, abi]
+    additionalProperties: false
+    description: >
+      Present on python_wheel / python_sdist recipes (Phase 7).  Declares
+      which cvcpkg interpreter the artifact targets, so the wheel matrix
+      resolves through the ordinary depends graph.
+    properties:
+      interpreter:
+        type: string
+        pattern: "^python3[0-9]{2}t?$"
+        description: "cvcpkg interpreter recipe this artifact targets, e.g. python313t"
+      abi:
+        type: string
+        pattern: "^(cp3[0-9]{2}t?|abi3)$"
+        description: >
+          CPython ABI tag the artifact is built for (cp311 … cp313t), or
+          abi3 for a stable-ABI wheel.  A trailing 't' is the free-threaded
+          (no-GIL) ABI, whose test step runs with the GIL disabled.  abi3
+          wheels are version-independent, so one recipe covers every
+          interpreter from `interpreter` upwards and the matrix collapses to
+          a single column — note the 3.13 free-threaded build does not
+          support the stable ABI, so abi3 never implies cp313t coverage.
+      manylinux_min:
+        type: string
+        pattern: "^manylinux_[0-9]+_[0-9]+$"
+        description: "Minimum manylinux glibc floor, e.g. manylinux_2_28"
+      build_isolation:
+        type: boolean
+        description: >
+          python_sdist only.  False (the default) builds against the
+          prefix's cvcpkg C libraries instead of pip-downloaded copies —
+          this is the hermeticity payoff.
+      build_requires:
+        type: array
+        items: { type: string }
+        description: "Pinned build backend requirements when build_isolation is false"
+
+  depends_block:
+    type: object
+    additionalProperties: false
+    properties:
+      build:
+        type: array
+        items:
+          oneOf:
+            - type: string
+            - $ref: "#/$defs/dep_entry"
+      runtime:
+        type: array
+        items:
+          oneOf:
+            - type: string
+            - $ref: "#/$defs/dep_entry"
+        description: "Dependencies needed at runtime (included in manifests)"
+      host_tools:
+        type: array
+        items: { type: string }
+
+  dep_entry:
+    type: object
+    required: [name]
+    additionalProperties: false
+    properties:
+      name:
+        type: string
+      version:
+        type: string
+      platforms:
+        type: array
+        items:
+          type: string
+          enum: [linux, macos, windows, windows-gnu, wasm, wasi, cosmo, freebsd, openbsd, netbsd]
+        minItems: 1
+        description: "Platforms this dependency applies to (omit for all)"
+
+  build_block:
+    type: object
+    required: [matrix]
+    additionalProperties: false
+    properties:
+      build_type_independent:
+        type: boolean
+        description: "If true, only one config (Release) is built"
+      matrix:
+        type: array
+        items:
+          $ref: "#/$defs/matrix_entry"
+        minItems: 1
+
+  matrix_entry:
+    type: object
+    required: [platform, script]
+    additionalProperties: false
+    properties:
+      platform:
+        type: string
+        enum:
+          [
+            any,
+            linux,
+            macos,
+            windows,
+            windows-gnu,
+            wasm,
+            wasi,
+            cosmo,
+            freebsd,
+            openbsd,
+            netbsd,
+          ]
+        description: >
+          `any` marks a platform-independent recipe (Phase 14 source recipes
+          and pure-Python wheels): built once, valid everywhere, arch noarch.
+      host_platform:
+        type: string
+        enum: [linux, macos, windows, freebsd, openbsd, netbsd]
+        description: "Host platform for cross-compilation (e.g. linux for wasm builds)"
+      script:
+        type: string
+      vcpkg_port:
+        type: string
+      vcpkg_features:
+        type: array
+        items: { type: string }
+      env:
+        type: object
+        additionalProperties: { type: string }
+      note:
+        type: string
+        description: "Human-readable build note"
+
+  package_block:
+    type: object
+    required: [files]
+    additionalProperties: false
+    properties:
+      files:
+        type: array
+        items: { type: string }
+        minItems: 1
+      cmake_packages:
+        type: array
+        items:
+          type: object
+          required: [name, targets]
+          properties:
+            name: { type: string }
+            targets:
+              type: array
+              items: { type: string }
+      pkg_config:
+        type: array
+        items: { type: string }
+        description: "pkg-config module names shipped by this component"
+
+  test_block:
+    type: object
+    additionalProperties: false
+    properties:
+      script:
+        type: string
+
+  cross_toolchain_block:
+    type: object
+    additionalProperties: false
+    properties:
+      target_platforms:
+        type: array
+        items:
+          type: string
+          enum: [linux, macos, windows, windows-gnu, wasm, wasi, cosmo, freebsd, openbsd, netbsd]
+        minItems: 1
+        description: "Target platforms this toolchain can cross-compile for"
+      env:
+        type: object
+        additionalProperties: { type: string }
+        description: "Environment variables set for target builds (${PREFIX} is expanded)"
+    required: [target_platforms]
+
+  abi_block:
+    type: object
+    additionalProperties: false
+    properties:
+      cxx_std:
+        type: integer
+        enum: [11, 14, 17, 20, 23]
+      cxx_runtime:
+        type: string
+      libc:
+        type: string
+      crt_link:
+        type: string
+        enum: [dynamic, static]
+      link:
+        type: string
+        enum: [static, shared]
+        description: "Link type for this component"

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """Database-backed stores for cvcpkg-server.
 
 These classes implement the same interfaces as the YAML-file-based
@@ -2985,6 +2988,26 @@ class DbBuilderStore:
     """DB-backed store for registered remote build agents."""
 
     @staticmethod
+    def _normalize_served(org_slug: str, served: list[str] | None) -> list[str]:
+        """Return the served-namespace set: always contains *org_slug*, order-
+        stable and de-duplicated. An empty/None *served* means "home only"."""
+        from cvcpkg.orgs import served_set
+
+        return served_set(org_slug, served)
+
+    @classmethod
+    def _decode_served(cls, row: BuilderRow) -> list[str]:
+        try:
+            served = json.loads(row.served_namespaces or "[]")
+            if not isinstance(served, list):
+                served = []
+        except (json.JSONDecodeError, TypeError):
+            served = []
+        # Legacy rows (pre-migration) and empty sets fall back to home-only so
+        # a builder always at least serves its own namespace.
+        return cls._normalize_served(row.org_slug, [s for s in served if isinstance(s, str)])
+
+    @staticmethod
     def _row_to_info(row: BuilderRow) -> BuilderInfo:
         labels_raw = row.labels or "[]"
         caps_raw = row.capabilities or "{}"
@@ -3000,6 +3023,7 @@ class DbBuilderStore:
             id=row.id,
             name=row.name,
             org_slug=row.org_slug,
+            served_namespaces=DbBuilderStore._decode_served(row),
             platform=row.platform,
             arch=row.arch,
             labels=labels,
@@ -3021,6 +3045,7 @@ class DbBuilderStore:
         registered_by: str,
         *,
         org_slug: str = "",
+        served_namespaces: list[str] | None = None,
         labels: list[str] | None = None,
         capabilities: dict | None = None,
         max_jobs: int = 1,
@@ -3028,6 +3053,7 @@ class DbBuilderStore:
     ) -> BuilderInfo:
         """Register a new builder or re-register an existing one."""
         now = datetime.datetime.now(datetime.timezone.utc)
+        served = self._normalize_served(org_slug, served_namespaces)
         async with get_session() as session:
             row = (
                 await session.execute(
@@ -3040,6 +3066,7 @@ class DbBuilderStore:
             if row is not None:
                 row.platform = platform
                 row.arch = arch
+                row.served_namespaces = json.dumps(served)
                 row.labels = json.dumps(labels or [])
                 row.capabilities = json.dumps(capabilities or {})
                 row.max_jobs = max_jobs
@@ -3051,6 +3078,7 @@ class DbBuilderStore:
             row = BuilderRow(
                 name=name,
                 org_slug=org_slug,
+                served_namespaces=json.dumps(served),
                 platform=platform,
                 arch=arch,
                 labels=json.dumps(labels or []),
@@ -3104,6 +3132,7 @@ class DbBuilderStore:
         capabilities: dict | None = None,
         max_jobs: int | None = None,
         prefer_affinity: bool | None = None,
+        served_namespaces: list[str] | None = None,
     ) -> BuilderInfo | None:
         """Update mutable fields. Returns updated info or None if not found."""
         async with get_session() as session:
@@ -3120,6 +3149,11 @@ class DbBuilderStore:
                 row.max_jobs = max_jobs
             if prefer_affinity is not None:
                 row.prefer_affinity = prefer_affinity
+            if served_namespaces is not None:
+                # Re-anchor on the row's home org so it always stays served.
+                row.served_namespaces = json.dumps(
+                    self._normalize_served(row.org_slug, served_namespaces)
+                )
             return self._row_to_info(row)
 
     async def heartbeat(

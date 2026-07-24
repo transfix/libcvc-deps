@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """Recipe builder and packager for cvcpkg.
 
 Implements the ``cvcpkg build`` and ``cvcpkg pack`` workflow described
@@ -205,6 +208,9 @@ class Recipe:
     # declarations instead of n*(n-1) pairwise `conflicts` entries — and cannot
     # be declared asymmetrically.
     provides: list[str] = field(default_factory=list)
+    # Host capabilities that must ALL be present for this package to be
+    # selectable by the resolver (e.g. ``[cuda]``).  Empty = universal.
+    requires_capabilities: list[str] = field(default_factory=list)
     python: PythonSpec | None = None
 
     @property
@@ -247,6 +253,7 @@ class Recipe:
             cross_toolchain_env=ct_block.get("env", {}) or {},
             conflicts=raw.get("conflicts", []) or [],
             provides=raw.get("provides", []) or [],
+            requires_capabilities=raw.get("requires_capabilities", []) or [],
             python=PythonSpec.from_dict(python_block) if python_block else None,
         )
 
@@ -742,14 +749,14 @@ def _find_patchelf(*prefixes: Path | None) -> str | None:
     """Find patchelf, preferring a cvcpkg-built copy under *prefixes*.
 
     Packaging rewrites installed ``.so`` RPATHs to ``$ORIGIN`` with patchelf
-    (see :func:`_patch_linux_rpath`).  For the self-hosting goal — cvcpkg
+    (see :func:`_patch_elf_rpath`).  For the self-hosting goal — cvcpkg
     bootstraps all of its own build tooling — prefer the ``patchelf`` that
     cvcpkg built into the build/deps prefix (its ``bin/`` is populated when the
     ``patchelf`` recipe is bootstrapped as a host tool, see
     :func:`_bootstrap_host_tools`) over a system install.  Each prefix's
     ``bin/patchelf`` is tried in order; falls back to ``PATH`` otherwise.
 
-    ``_patch_linux_rpath`` runs in the cvcpkg parent process, whose ``PATH``
+    ``_patch_elf_rpath`` runs in the cvcpkg parent process, whose ``PATH``
     does not include the build prefix's ``bin`` (only the build *subprocess*
     gets that, via ``_build_env``), so the prefix must be probed explicitly.
 
@@ -764,16 +771,37 @@ def _find_patchelf(*prefixes: Path | None) -> str | None:
     return shutil.which("patchelf")
 
 
-def _patch_linux_rpath(install_dir: Path, patchelf: str | None = None) -> None:
-    """Set RPATH to $ORIGIN on all shared libraries in *install_dir*.
+# ELF platforms whose run-time linker expands ``$ORIGIN`` in RPATH, so the
+# $ORIGIN rewrite in _patch_elf_rpath makes their shared bundles relocatable.
+# OpenBSD is deliberately excluded: its ld.so does not implement $ORIGIN, so the
+# rewrite would be silently ignored — relocatable OpenBSD bundles need a
+# different mechanism if/when it becomes an active build target. macOS/Windows
+# are handled separately (install_name / PATH-relative DLLs).
+_ELF_RPATH_PLATFORMS = frozenset({"linux", "freebsd", "netbsd", "dragonflybsd"})
 
-    This makes Linux shared-library bundles relocatable without
-    requiring LD_LIBRARY_PATH at runtime.  Only runs when patchelf
-    is available; silently skips otherwise.
+
+def _patch_elf_rpath(install_dir: Path, patchelf: str | None = None) -> None:
+    """Prepend ``$ORIGIN`` to the RPATH of shared libraries in *install_dir*.
+
+    This makes ELF shared-library bundles relocatable without requiring
+    LD_LIBRARY_PATH at runtime.  Applies to Linux AND the ELF BSDs whose
+    run-time linker expands ``$ORIGIN`` (FreeBSD/GhostBSD, NetBSD,
+    DragonflyBSD) — see ``_ELF_RPATH_PLATFORMS``.  Only runs when patchelf is
+    available; silently skips otherwise.
 
     *patchelf* is the resolved patchelf binary to use — callers pass the
     cvcpkg-built one (via :func:`_find_patchelf`) so packaging does not depend
     on a system install.  When ``None`` it is looked up on ``PATH``.
+
+    Crucially it PRESERVES any pre-existing ``$ORIGIN``-relative RPATH
+    entries rather than clobbering them.  Python wheels bundle their native
+    dependencies in a sibling directory and point at it with an RPATH like
+    ``$ORIGIN/../../numpy.libs`` (numpy's OpenBLAS, scipy's libgfortran, …);
+    the old blind ``--remove-rpath`` + ``--set-rpath $ORIGIN`` destroyed that
+    link, so the bundled ``libscipy_openblas*.so`` became unreachable and
+    ``import numpy`` failed with "cannot open shared object file".  Absolute
+    (build-temp) RPATH entries are still dropped — only relocatable
+    ``$ORIGIN``-relative ones are kept.
     """
     if patchelf is None:
         patchelf = shutil.which("patchelf")
@@ -785,14 +813,77 @@ def _patch_linux_rpath(install_dir: Path, patchelf: str | None = None) -> None:
     for so in lib_dir.rglob("*.so*"):
         if not so.is_file() or so.is_symlink():
             continue
+        existing = subprocess.run(
+            [patchelf, "--print-rpath", str(so)],
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        # Keep only relocatable ($ORIGIN-relative) entries, drop bare $ORIGIN
+        # (re-added first) and any absolute build-temp paths.
+        kept = [e for e in existing.split(":") if e.startswith("$ORIGIN") and e != "$ORIGIN"]
+        new_rpath = ":".join(["$ORIGIN", *kept])
         subprocess.run(
-            [patchelf, "--remove-rpath", str(so)],
+            [patchelf, "--set-rpath", new_rpath, str(so)],
             capture_output=True,
         )
+
+
+def _patch_macos_install_names(install_dir: Path) -> None:
+    """Rewrite absolute build-tree install names to ``@rpath`` on macOS dylibs.
+
+    The macOS analog of :func:`_patch_elf_rpath`.  autotools/libtool builds
+    (e.g. ImageMagick) bake the absolute build-temp install prefix into a
+    dylib's own install name (``LC_ID_DYLIB``) and into its references to
+    sibling dylibs (``LC_LOAD_DYLIB``).  Once the bundle is unpacked elsewhere
+    that path no longer exists, so anything linking the dylib records the dead
+    path and fails under dyld ("Library not loaded:
+    .../cvcpkg-<recipe>-XXXX/install/lib/...").  CMake builds already default to
+    ``@rpath`` install names (``MACOSX_RPATH``), so this only rescues the
+    autotools/hand-rolled ones.
+
+    For every dylib in *install_dir*/lib it: sets the id to ``@rpath/<leaf>``;
+    adds a ``@loader_path`` RPATH so the dylib finds its siblings next to itself
+    (the ``$ORIGIN`` analog); and rewrites any absolute reference that points at
+    another dylib IN THIS BUNDLE to ``@rpath/<leaf>``.  System references
+    (/usr/lib, /System/...) are left untouched.  Only runs when
+    ``install_name_tool``/``otool`` are available (any macOS host); silently
+    skips otherwise.
+    """
+    install_name_tool = shutil.which("install_name_tool")
+    otool = shutil.which("otool")
+    if not install_name_tool or not otool:
+        return
+    lib_dir = install_dir / "lib"
+    if not lib_dir.is_dir():
+        return
+    # Leaf names of every dylib the bundle ships (incl. version symlinks), so we
+    # only rewrite references that resolve to one of OUR libraries.
+    bundle_leaves = {p.name for p in lib_dir.rglob("*.dylib")}
+    for dylib in lib_dir.rglob("*.dylib"):
+        if not dylib.is_file() or dylib.is_symlink():
+            continue
         subprocess.run(
-            [patchelf, "--set-rpath", "$ORIGIN", str(so)],
+            [install_name_tool, "-id", f"@rpath/{dylib.name}", str(dylib)],
             capture_output=True,
         )
+        # Idempotent: -add_rpath errors (harmlessly) if @loader_path is present.
+        subprocess.run(
+            [install_name_tool, "-add_rpath", "@loader_path", str(dylib)],
+            capture_output=True,
+        )
+        listing = subprocess.run(
+            [otool, "-L", str(dylib)],
+            capture_output=True,
+            text=True,
+        ).stdout
+        # First line is the file path itself; the rest are dependent libraries.
+        for line in listing.splitlines()[1:]:
+            ref = line.strip().split(" ", 1)[0]
+            if ref.startswith("/") and Path(ref).name in bundle_leaves:
+                subprocess.run(
+                    [install_name_tool, "-change", ref, f"@rpath/{Path(ref).name}", str(dylib)],
+                    capture_output=True,
+                )
 
 
 def run_build(
@@ -883,13 +974,19 @@ def run_build(
     if returncode != 0:
         raise BuildError(f"Build script for {ctx.recipe.name} exited with code {returncode}")
 
-    # Patch RPATH on Linux shared builds so bundles are relocatable.  Prefer
-    # cvcpkg's own patchelf (bootstrapped into the build prefix as a host tool)
-    # over a system install, so packaging is self-hosting — see _find_patchelf
-    # and _bootstrap_host_tools.
-    if ctx.platform == "linux" and ctx.link == "shared":
-        patchelf = _find_patchelf(ctx.build_prefix, ctx.prefix)
-        _patch_linux_rpath(ctx.install_dir, patchelf)
+    # Make shared bundles relocatable: rewrite absolute build-tree paths so
+    # consumers load the libraries without LD_LIBRARY_PATH/DYLD_* — $ORIGIN
+    # RPATH on ELF (Linux + the $ORIGIN-honouring BSDs), @rpath install names on
+    # macOS. (Windows resolves DLLs from the prefix bin dir on PATH, so it needs
+    # no rewrite here.)  On ELF, prefer cvcpkg's own patchelf (bootstrapped into
+    # the build prefix as a host tool) over a system install, so packaging is
+    # self-hosting — see _find_patchelf and _bootstrap_host_tools.
+    if ctx.link == "shared":
+        if ctx.platform == "macos":
+            _patch_macos_install_names(ctx.install_dir)
+        elif ctx.platform in _ELF_RPATH_PLATFORMS:
+            patchelf = _find_patchelf(ctx.build_prefix, ctx.prefix)
+            _patch_elf_rpath(ctx.install_dir, patchelf)
 
 
 # ── Test execution ──────────────────────────────────────────────
@@ -1143,6 +1240,18 @@ def generate_manifest(
         "dependencies": {
             "required": dep_list,
         },
+        # Top-level virtual-package metadata (siblings of ``bundle:``): the
+        # names this bundle satisfies and the host capabilities it requires.
+        # Mirrors what BundleManifest.from_dict reads back, and is copied
+        # verbatim into each catalog/index entry for capability-ranked
+        # resolution.  ``contents.provides`` above is retained for the
+        # installed-prefix view.
+        **({"provides": list(recipe.provides)} if recipe.provides else {}),
+        **(
+            {"requires_capabilities": list(recipe.requires_capabilities)}
+            if recipe.requires_capabilities
+            else {}
+        ),
         "integrity": {
             "sha256": "",
             "size_bytes": 0,

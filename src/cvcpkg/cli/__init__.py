@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """cvcpkg command-line interface (click-based).
 
 This package defines the entire CLI surface for cvcpkg, the component
@@ -44,6 +47,29 @@ def _restore_default_sigpipe() -> None:
         pass
 
 
+def _force_utf8_stdio() -> None:
+    """Emit UTF-8 regardless of the console's locale encoding.
+
+    Windows consoles default to a legacy code page (cp1252), so any non-ASCII in
+    cvcpkg's output — the ``install-deps`` arrow, ``validate``'s ✓/✗ marks, the
+    box-drawing in help — raises ``UnicodeEncodeError`` and aborts the command
+    (this is what broke ``cvcpkg install-deps`` on the Windows build runners).
+    Reconfigure stdout/stderr to UTF-8; ``errors="replace"`` keeps output flowing
+    even if a stream cannot switch.  No-op on streams that predate
+    ``reconfigure`` (< 3.7) or don't support it.
+    """
+    import sys
+
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, OSError):
+            pass
+
+
 # ── Root group ──────────────────────────────────────────────────
 
 
@@ -51,10 +77,11 @@ def _restore_default_sigpipe() -> None:
 @click.version_option(__version__, prog_name="cvcpkg")
 @click.pass_context
 def cli(ctx: click.Context) -> None:
-    """Component package manager for libcvc-deps prebuilt dependency bundles.
+    """Cross-platform, language-agnostic package manager and binary archive
+    for the scientific computing community.
 
     cvcpkg resolves, downloads, and installs prebuilt component bundles
-    from the libcvc-deps catalog, or builds them from source recipes.
+    from the cvcpkg catalog, or builds them from source recipes.
 
     \b
     Quick start (downstream consumer):
@@ -62,11 +89,15 @@ def cli(ctx: click.Context) -> None:
       cmake -B build -DCMAKE_PREFIX_PATH=./deps
 
     \b
-    Quick start (libcvc-deps maintainer):
+    Quick start (recipe maintainer):
       cvcpkg build-all --prefix ./prefix --recipes-dir recipes
       cvcpkg validate
+
+    \b
+    © 2026 CyberPC Angel, LLC — released under the MIT License
     """
     _restore_default_sigpipe()
+    _force_utf8_stdio()
     if ctx.invoked_subcommand is None:
         from cvcpkg.branding import splash
 

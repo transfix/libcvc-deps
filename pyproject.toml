@@ -1,7 +1,7 @@
 [tool.poetry]
 name = "cvcpkg"
 version = "2.0.0"
-description = "Component package manager for libcvc-deps prebuilt dependency bundles"
+description = "Cross-platform, language-agnostic package manager and binary archive for the scientific computing community"
 authors = ["cvcpkg group <info@cvcpkg.org>"]
 license = "MIT"
 readme = "README.md"
@@ -27,6 +27,9 @@ classifiers = [
 packages = [{ include = "cvcpkg", from = "src" }]
 include = [
     { path = "src/cvcpkg/recipes", format = ["sdist", "wheel"] },
+    # Packaging JSON-Schemas (recipe/components/manifest) ship in the wheel so
+    # `cvcpkg validate` loads them via importlib.resources from any repo's CI.
+    { path = "src/cvcpkg/schemas", format = ["sdist", "wheel"] },
     { path = "src/cvcpkg/server/assets", format = ["sdist", "wheel"] },
     { path = "cvcpkg_build_backend.py", format = "sdist" },
 ]
