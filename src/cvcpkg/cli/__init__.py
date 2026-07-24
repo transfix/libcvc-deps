@@ -92,6 +92,9 @@ def cli(ctx: click.Context) -> None:
     Quick start (recipe maintainer):
       cvcpkg build-all --prefix ./prefix --recipes-dir recipes
       cvcpkg validate
+
+    \b
+    © 2026 CyberPC Angel, LLC — released under the MIT License
     """
     _restore_default_sigpipe()
     _force_utf8_stdio()

@@ -43,13 +43,16 @@ alongside the rename and the org move below, and lands **before** the Phase 25
 PyPI publish so the first public release carries the correct ownership.
 
 - [x] **Copyright & provenance branding sweep → CyberPC Angel, LLC.**  Set
-      the owning entity to CyberPC Angel, LLC everywhere provenance is
-      asserted: `pyproject.toml` (`authors`),
-      `README.md`, the server landing-page footer (currently
-      `cvcpkg — cross-platform binary package archive…`, no owner), the docs,
-      and the GitHub repo metadata/social preview.  *(The `LICENSE` file
-      already carries `Copyright (c) 2026 CyberPC Angel, LLC` — this
-      generalizes that to the rest of the project.)*  `pyproject.toml`
+      the owning entity to CyberPC Angel, LLC everywhere copyright/IP
+      ownership is asserted: `README.md`'s License section, the server
+      landing-page footer (currently
+      `cvcpkg — cross-platform binary package archive…`, no owner), and the
+      `cvcpkg --help` text.  *(The `LICENSE` file already carries
+      `Copyright (c) 2026 CyberPC Angel, LLC` — this generalizes that to the
+      rest of the project.)*  `pyproject.toml` `authors` stays `cvcpkg group
+      <info@cvcpkg.org>` — that field names the group that operates/
+      maintains the package, a distinct entity from CyberPC Angel, LLC,
+      which owns the underlying IP/copyright.  `pyproject.toml`
       `homepage`/`repository` and the GitHub repo metadata/social preview
       still point at `transfix/libcvc-deps` — those flip together with the
       org move below, not before it exists.
