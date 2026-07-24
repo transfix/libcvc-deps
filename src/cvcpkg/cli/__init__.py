@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """cvcpkg command-line interface (click-based).
 
 This package defines the entire CLI surface for cvcpkg, the component

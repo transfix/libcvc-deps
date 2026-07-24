@@ -1816,4 +1816,5 @@ everyone who has contributed on the
 
 ## License
 
-MIT — see [LICENSE](../../LICENSE).
+MIT — Copyright (c) 2026 CyberPC Angel, LLC. See [LICENSE](LICENSE) for the
+full text.
