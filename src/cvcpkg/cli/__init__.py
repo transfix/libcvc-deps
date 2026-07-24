@@ -77,10 +77,11 @@ def _force_utf8_stdio() -> None:
 @click.version_option(__version__, prog_name="cvcpkg")
 @click.pass_context
 def cli(ctx: click.Context) -> None:
-    """Component package manager for libcvc-deps prebuilt dependency bundles.
+    """Cross-platform, language-agnostic package manager and binary archive
+    for the scientific computing community.
 
     cvcpkg resolves, downloads, and installs prebuilt component bundles
-    from the libcvc-deps catalog, or builds them from source recipes.
+    from the cvcpkg catalog, or builds them from source recipes.
 
     \b
     Quick start (downstream consumer):
@@ -88,7 +89,7 @@ def cli(ctx: click.Context) -> None:
       cmake -B build -DCMAKE_PREFIX_PATH=./deps
 
     \b
-    Quick start (libcvc-deps maintainer):
+    Quick start (recipe maintainer):
       cvcpkg build-all --prefix ./prefix --recipes-dir recipes
       cvcpkg validate
     """
