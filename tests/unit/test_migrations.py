@@ -149,9 +149,7 @@ def test_migration_023_backfills_served_namespaces(tmp_path):
     assert p.returncode == 0, p.stderr
 
     con = sqlite3.connect(db)
-    (served,) = con.execute(
-        "SELECT served_namespaces FROM builders WHERE name = 'b1'"
-    ).fetchone()
+    (served,) = con.execute("SELECT served_namespaces FROM builders WHERE name = 'b1'").fetchone()
     con.close()
     assert served == '["cvc"]', served
 
