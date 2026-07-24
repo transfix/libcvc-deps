@@ -31,19 +31,28 @@ fi
 PY_ROOT="$(cd "$(dirname "${PY_EXE}")/.." && pwd)"
 echo "shiboken6: building against ${PY_EXE}"
 
-# ── SYSTEM libclang-18 for ApiExtractor (external, not a cvcpkg dep) ──────────
+# ── Hermetic libclang 18 (cvcpkg llvm18) for ApiExtractor ────────────────────
 # shiboken's setup_clang() reads LLVM_INSTALL_DIR to find ClangConfig.cmake +
 # libclang and, at generation time, the Clang builtin/resource headers under
-# ${LLVM_INSTALL_DIR}/lib/clang/<ver>/include. Override at build time if the
-# host puts llvm-18 elsewhere. REQUIRES `libclang-18-dev` (pulls
-# libclang-common-18-dev) installed on the build host.
-: "${LLVM_INSTALL_DIR:=/usr/lib/llvm-18}"
+# ${LLVM_INSTALL_DIR}/lib/clang/<ver>/include. Prefer the cvcpkg llvm18 in the
+# dependency prefix (a hermetic dep of this recipe); fall back to a system
+# /usr/lib/llvm-18 only if a caller hasn't set LLVM_INSTALL_DIR and llvm18 is
+# somehow absent.
+if [[ -z "${LLVM_INSTALL_DIR:-}" ]]; then
+    for _llvm in "${CVC_DEPS_PREFIX:-}" "${CVC_BUILD_PREFIX:-}" "${CVC_INSTALL_DIR}"; do
+        if [[ -n "${_llvm}" && -f "${_llvm}/lib/cmake/clang/ClangConfig.cmake" ]]; then
+            LLVM_INSTALL_DIR="${_llvm}"; break
+        fi
+    done
+    : "${LLVM_INSTALL_DIR:=/usr/lib/llvm-18}"
+fi
 export LLVM_INSTALL_DIR
-if [[ ! -x "${LLVM_INSTALL_DIR}/bin/llvm-config" ]]; then
-    echo "shiboken6: WARNING ${LLVM_INSTALL_DIR}/bin/llvm-config not found — install libclang-18-dev" >&2
+echo "shiboken6: LLVM_INSTALL_DIR=${LLVM_INSTALL_DIR}"
+if [[ ! -f "${LLVM_INSTALL_DIR}/lib/cmake/clang/ClangConfig.cmake" ]]; then
+    echo "shiboken6: WARNING ClangConfig.cmake not under ${LLVM_INSTALL_DIR} — is llvm18 in the closure?" >&2
 fi
 if [[ -z "$(find "${LLVM_INSTALL_DIR}/lib/clang" -maxdepth 2 -name stddef.h 2>/dev/null | head -1)" ]]; then
-    echo "shiboken6: WARNING Clang builtin headers (…/lib/clang/*/include) missing — install libclang-common-18-dev" >&2
+    echo "shiboken6: WARNING Clang builtin headers (…/lib/clang/*/include) missing under ${LLVM_INSTALL_DIR}" >&2
 fi
 # Ensure the freshly-built generator can resolve libclang/libQt6Core/libshiboken
 # if it is invoked during this build (and to keep the env consistent with the

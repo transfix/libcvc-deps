@@ -27,14 +27,23 @@ fi
 PY_ROOT="$(cd "$(dirname "${PY_EXE}")/.." && pwd)"
 echo "pyside6: building against ${PY_EXE}"
 
-# ── SYSTEM libclang-18 (external): needed because the shiboken6 generator runs
-# during THIS build to parse Qt headers. Same toolchain shiboken6 was built
-# against. REQUIRES `libclang-18-dev` (+ libclang-common-18-dev) on the host.
-: "${LLVM_INSTALL_DIR:=/usr/lib/llvm-18}"
+# ── Hermetic libclang 18 (cvcpkg llvm18) — the shiboken6 generator runs during
+# THIS build to parse Qt headers and links libclang. Prefer the cvcpkg llvm18 in
+# the dependency prefix (pulled in transitively via shiboken6); system
+# /usr/lib/llvm-18 only as a last-resort fallback.
+if [[ -z "${LLVM_INSTALL_DIR:-}" ]]; then
+    for _llvm in "${CVC_DEPS_PREFIX:-}" "${CVC_BUILD_PREFIX:-}" "${CVC_INSTALL_DIR}"; do
+        if [[ -n "${_llvm}" && -f "${_llvm}/lib/cmake/clang/ClangConfig.cmake" ]]; then
+            LLVM_INSTALL_DIR="${_llvm}"; break
+        fi
+    done
+    : "${LLVM_INSTALL_DIR:=/usr/lib/llvm-18}"
+fi
 export LLVM_INSTALL_DIR
+echo "pyside6: LLVM_INSTALL_DIR=${LLVM_INSTALL_DIR}"
 
 # The generator (bin/shiboken6, from the shiboken6 package) needs to resolve, at
-# RUN time during this build: libclang (system llvm-18), libQt6Core (cvcpkg qt6),
+# RUN time during this build: libclang (cvcpkg llvm18), libQt6Core (cvcpkg qt6),
 # libshiboken6 (cvcpkg shiboken6). Put all three lib dirs on the loader path.
 export LD_LIBRARY_PATH="${LLVM_INSTALL_DIR}/lib:${CVC_DEPS_PREFIX:-}/lib:${CVC_BUILD_PREFIX:-}/lib:${LD_LIBRARY_PATH:-}"
 

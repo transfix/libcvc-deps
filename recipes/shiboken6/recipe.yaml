@@ -23,8 +23,8 @@ recipe:
     Shiboken6 CMake config that the `pyside6` recipe consumes to generate its
     bindings. Built against the cvcpkg python311 interpreter and the cvcpkg qt6
     6.8.2 — the SAME Qt PySide6 and the host app link, so there is one
-    libQt6Core in-process. The ApiExtractor parser links the SYSTEM libclang-18
-    (see host_tools note); the cvcpkg `llvm` recipe is deliberately NOT used
+    libQt6Core in-process. The ApiExtractor parser links the hermetic cvcpkg llvm18
+    (see the CLANG COUPLING note below); the cvcpkg `llvm` recipe is deliberately NOT used
     because it is LLVM 22, newer than shiboken 6.8.2 supports. Python-ABI
     specific (cp311); a python312/313 host needs a parallel variant.
 
@@ -51,15 +51,13 @@ depends:
     # the same Qt headers the host app uses. Pin to the exact in-process Qt.
     - name: qt6
       version: "6.8.2"
-    # EXTERNAL, NOT a cvcpkg dependency (intentionally not listed as a cvcpkg
-    # name): the SYSTEM LLVM/Clang 18 dev packages must be present on the build
-    # host for shiboken's ApiExtractor. On Ubuntu 24.04 install:
-    #     apt-get install libclang-18-dev
-    # which pulls libclang-common-18-dev (the Clang builtin/resource headers
-    # under /usr/lib/llvm-18/lib/clang/18/include that the parser needs) and
-    # provides the unversioned libclang.so dev symlink + ClangConfig.cmake that
-    # `find_package(Clang CONFIG REQUIRED)` locates via LLVM_INSTALL_DIR. Do NOT
-    # substitute the cvcpkg `llvm` recipe (LLVM 22 — too new for 6.8.2).
+    # Hermetic libclang 18 for shiboken's ApiExtractor: find_package(Clang CONFIG)
+    # (ClangConfig.cmake), libclang the generator links, and the Clang builtin
+    # (resource) headers under lib/clang/<ver>/include the parser needs at
+    # generation time. Pinned to 18 — the top-level `llvm` recipe (LLVM 22) is too
+    # new for shiboken 6.8.2. Replaces the former SYSTEM libclang-18 requirement.
+    - name: llvm18
+      version: "18.1.8"
   runtime:
     # The shiboken6 Python module (wrapInstance) imports against this cp311.
     - name: python311
@@ -67,6 +65,10 @@ depends:
     # matches PySide6 and the in-process host Qt.
     - name: qt6
       version: "6.8.2"
+    # bin/shiboken6 links libclang — keep it resolvable when a consumer (pyside6)
+    # runs the generator.
+    - name: llvm18
+      version: "18.1.8"
   host_tools:
     - cmake
     - ninja
@@ -108,12 +110,13 @@ notes: >-
   the cvcpkg qt6 by soname and there is one libQt6Core in-process. Never enable
   STANDALONE here.
 
-  CLANG COUPLING: the generator is validated against LLVM/Clang 18. shiboken
-  6.8.2's setup_clang() runs find_package(Clang CONFIG REQUIRED) and warns below
-  18.0 (hard-fails below 14.0); the runtime parser additionally needs the Clang
-  builtin/resource headers (…/lib/clang/18/include), which come from
-  libclang-common-18-dev. LLVM_INSTALL_DIR=/usr/lib/llvm-18 points cmake and the
-  runtime parser at that toolchain.
+  CLANG COUPLING: the generator is validated against LLVM/Clang 18, provided
+  hermetically by the cvcpkg `llvm18` dependency. shiboken 6.8.2's setup_clang()
+  runs find_package(Clang CONFIG REQUIRED) and warns below 18.0 (hard-fails below
+  14.0); the runtime parser additionally needs the Clang builtin/resource headers
+  (lib/clang/18/include), which llvm18 packages. build.sh sets LLVM_INSTALL_DIR to
+  the dependency prefix (where llvm18 installs ClangConfig.cmake + libclang + the
+  resource headers), falling back to a system /usr/lib/llvm-18 only if absent.
 
   LIMITED API: built with FORCE_LIMITED_API=yes (upstream default → stable-ABI
   .abi3.so). pyside6 MUST be built with the same setting. Set FORCE_LIMITED_API=no
