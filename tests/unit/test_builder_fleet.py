@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import textwrap
+from pathlib import Path
 
 import pytest
 
@@ -56,7 +57,8 @@ def test_parse_multi_server_with_defaults_and_overrides(monkeypatch):
     assert prod.max_jobs == 4  # inherits fleet default
     assert dev.max_jobs == 2  # per-server override
     # work_dir gets a per-server subdirectory; labels inherit fleet default.
-    assert prod.work_dir.endswith("/cvcpkg-org")
+    # (Path is OS-native, so compare the leaf name rather than a POSIX suffix.)
+    assert Path(prod.work_dir).name == "cvcpkg-org"
     assert prod.labels == ("ramdisk",)
 
 
@@ -118,7 +120,8 @@ def test_worker_argv_maps_served_set_to_org_and_serve():
     assert "--serve" in argv and argv[argv.index("--serve") + 1] == "cvc"
     assert argv[argv.index("--max-jobs") + 1] == "3"
     assert argv[argv.index("--work-dir") + 1] == "/w/prod"
-    assert argv[argv.index("--pidfile") + 1] == "/w/prod/cvcpkg-builder.pid"
+    # pidfile is a Path join → OS-native separators; compare as paths.
+    assert Path(argv[argv.index("--pidfile") + 1]) == Path("/w/prod") / "cvcpkg-builder.pid"
     assert argv[argv.index("--label") + 1] == "ramdisk"
 
 
