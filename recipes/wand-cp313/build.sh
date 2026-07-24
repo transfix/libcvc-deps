@@ -35,9 +35,11 @@ import wand, wand.api
 from wand.version import VERSION, MAGICK_VERSION
 from wand.image import Image
 with Image(width=8, height=8, background='red') as img:
-    img.format = 'png'
-    blob = img.make_blob()
-assert blob[:4] == bytes([137, 80, 78, 71]), 'wand did not produce a PNG'
+    # MIFF is ImageMagick's native format — always built in (no codec delegate),
+    # so this verifies the MagickWand binding without depending on which image
+    # coders (jpeg/png/webp) the resolved imagemagick happens to ship.
+    blob = img.make_blob('MIFF')
+assert blob and len(blob) > 0, 'wand produced no image data'
 lib = wand.api.libmagick._name
 assert lib.startswith('${CVC_DEPS_PREFIX}'), 'NOT hermetic: bound ' + lib
 print('Wand', VERSION, 'bound', MAGICK_VERSION)
