@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import sys
 import tarfile
 import zipfile
 from pathlib import Path
@@ -2010,6 +2011,11 @@ class TestBootstrapHostTools:
         assert _bootstrap_host_tools(recipes, "linux", "shared") == []
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="ELF RPATH self-host relocation is a Linux/BSD path; the fake "
+    "patchelf and build.sh are POSIX shell scripts Windows cannot exec.",
+)
 class TestRunBuildSelfHostRelocation:
     """End-to-end: a linux shared build relocates via cvcpkg's own patchelf
     with NO system patchelf present — the self-host acceptance path."""
