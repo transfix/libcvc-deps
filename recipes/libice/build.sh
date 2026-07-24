@@ -20,4 +20,10 @@ cd "${CVC_SOURCE_DIR}"
 make -j "${CVC_JOBS}"
 make install
 
+# Strip libtool archives (.la): they embed the dependency's absolute build-prefix
+# path, which is gone after cvcpkg relocates the prefix, so a downstream libtool
+# link fails with "not a valid libtool archive". The .so + pkg-config .pc carry
+# the real link info; nothing needs the .la.
+find "${CVC_INSTALL_DIR}" -name '*.la' -delete
+
 cvc_rewrite_install_paths
