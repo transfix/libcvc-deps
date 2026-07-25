@@ -16,8 +16,16 @@ _link=(--enable-shared --disable-static)
 
 cd "${CVC_SOURCE_DIR}"
 ./configure --prefix="${CVC_INSTALL_DIR}" "${_link[@]}"
-make -j "${CVC_JOBS}"
-make install
+
+# xcb-util-wm's generated Makefile uses a GNU-make idiom ($< in a non-suffix
+# rule) that OpenBSD's BSD make rejects ("Using $< in a non-suffix rule context
+# is a GNUmake idiom") — the other xcb-util recipes build fine with BSD make, but
+# this one needs GNU make. Prefer gmake where present (OpenBSD ships it as the
+# `gmake` package); harmless elsewhere since $MAKE stays `make`.
+MAKE=make
+if command -v gmake >/dev/null 2>&1; then MAKE=gmake; fi
+"${MAKE}" -j "${CVC_JOBS}"
+"${MAKE}" install
 
 # Strip libtool archives (.la): they embed the dependency's absolute build-prefix
 # path, which is gone after cvcpkg relocates the prefix, so a downstream libtool
