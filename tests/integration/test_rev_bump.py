@@ -12,6 +12,7 @@ build scripts, verifying that:
 from __future__ import annotations
 
 import os
+import tarfile
 from pathlib import Path
 
 import pytest
@@ -657,3 +658,144 @@ class TestNextRevisionCli:
         ret = main(["next-revision", "pkg", "--recipes-dir", str(rd), "--server", "http://x"])
         assert ret == 0
         assert capsys.readouterr().out.strip() == "4"
+
+
+# ── CLI: pack --bump / --cvc-revision / --bump-write (from-prefix) ───
+#
+# Exercises the exact command surface publish-cvcpkg.yml uses:
+# `cvcpkg pack <recipe> --from-prefix <stage> ...`.  No build or network.
+
+
+class TestPackBumpCli:
+    def _prefix(self, root: Path) -> Path:
+        (root / "lib").mkdir(parents=True)
+        (root / "lib" / "libfoo.so").write_bytes(b"fake shared lib")
+        return root
+
+    def _bundle(self, archive: Path) -> dict:
+        with tarfile.open(archive, "r:*") as tf:
+            entry = next(m for m in tf.getmembers() if m.name.endswith("manifest.yaml"))
+            return yaml.safe_load(tf.extractfile(entry).read())["bundle"]
+
+    def test_pack_from_prefix_cvc_revision(self, tmp_path):
+        rd = _make_recipe(tmp_path / "recipes", "foo", revision=2)
+        prefix = self._prefix(tmp_path / "stage")
+        out = tmp_path / "dist"
+
+        ret = main(
+            [
+                "pack",
+                str(rd),
+                "--from-prefix",
+                str(prefix),
+                "--platform",
+                "linux",
+                "--cvc-revision",
+                "7",
+                "--local",
+                "--output-dir",
+                str(out),
+            ]
+        )
+        assert ret == 0
+        archive = next(out.glob("foo-*"))
+        assert "+cvc.7" in archive.name
+        assert self._bundle(archive)["cvc_revision"] == 7
+        # stamp-only: recipe.yaml is untouched
+        assert Recipe.load(rd).cvc_revision == 2
+
+    def test_pack_from_prefix_bump_queries_server(self, tmp_path, monkeypatch):
+        rd = _make_recipe(tmp_path / "recipes", "foo", revision=1)
+        prefix = self._prefix(tmp_path / "stage")
+        out = tmp_path / "dist"
+        # foo published at +cvc.2 -> --bump packs +cvc.3.
+        monkeypatch.setattr("httpx.Client", _fake_client_by_name({"foo": ["1.0.0+cvc.2"]}))
+
+        ret = main(
+            [
+                "pack",
+                str(rd),
+                "--from-prefix",
+                str(prefix),
+                "--platform",
+                "linux",
+                "--bump",
+                "--server",
+                "http://x",
+                "--local",
+                "--output-dir",
+                str(out),
+            ]
+        )
+        assert ret == 0
+        archive = next(out.glob("foo-*"))
+        assert "+cvc.3" in archive.name
+        assert self._bundle(archive)["cvc_revision"] == 3
+        assert Recipe.load(rd).cvc_revision == 1  # unchanged
+
+    def test_pack_bump_write_persists_to_recipe(self, tmp_path):
+        rd = _make_recipe(tmp_path / "recipes", "foo", revision=2)
+        prefix = self._prefix(tmp_path / "stage")
+        out = tmp_path / "dist"
+
+        ret = main(
+            [
+                "pack",
+                str(rd),
+                "--from-prefix",
+                str(prefix),
+                "--platform",
+                "linux",
+                "--cvc-revision",
+                "9",
+                "--bump-write",
+                "--local",
+                "--output-dir",
+                str(out),
+            ]
+        )
+        assert ret == 0
+        assert Recipe.load(rd).cvc_revision == 9  # persisted
+
+    def test_pack_bump_and_cvc_revision_are_mutually_exclusive(self, tmp_path):
+        rd = _make_recipe(tmp_path / "recipes", "foo")
+        prefix = self._prefix(tmp_path / "stage")
+
+        ret = main(
+            [
+                "pack",
+                str(rd),
+                "--from-prefix",
+                str(prefix),
+                "--platform",
+                "linux",
+                "--bump",
+                "--cvc-revision",
+                "5",
+                "--local",
+                "--output-dir",
+                str(tmp_path / "dist"),
+            ]
+        )
+        assert ret != 0  # click.UsageError
+
+    def test_pack_bump_downstream_rejected_with_from_prefix(self, tmp_path):
+        rd = _make_recipe(tmp_path / "recipes", "foo")
+        prefix = self._prefix(tmp_path / "stage")
+
+        ret = main(
+            [
+                "pack",
+                str(rd),
+                "--from-prefix",
+                str(prefix),
+                "--platform",
+                "linux",
+                "--bump",
+                "--bump-downstream",
+                "--local",
+                "--output-dir",
+                str(tmp_path / "dist"),
+            ]
+        )
+        assert ret != 0  # UsageError: --bump-downstream needs a build
