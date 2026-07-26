@@ -22,8 +22,20 @@ package at the consumer prefix.
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
+import sys
 from pathlib import Path
+
+import pytest
+
+# cvc_rewrite_install_paths is a POSIX build-time shell helper sourced by
+# cvc_cmake_build (env-{linux,macos,freebsd,openbsd,netbsd}.sh); windows recipes
+# use build.ps1 and never touch it. Skip where it (or bash) does not apply.
+pytestmark = pytest.mark.skipif(
+    sys.platform == "win32" or shutil.which("bash") is None,
+    reason="POSIX-only build-time helper (bash); windows recipes use build.ps1",
+)
 
 HELPER = Path(__file__).resolve().parents[2] / "recipes" / "_common" / "rewrite-install-paths.sh"
 
