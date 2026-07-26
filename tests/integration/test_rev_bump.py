@@ -526,3 +526,134 @@ class TestRevBumpRealRecipes:
                 dep_name = dep if isinstance(dep, str) else dep["name"]
                 # Some deps are optional/external — just check it doesn't crash
                 get_downstream(dep_name, recipes)
+
+
+# ── rev_bump with a published-aware revision_for ────────────────
+
+
+class TestRevBumpRevisionFor:
+    """rev_bump(revision_for=...) chooses the new revision per recipe."""
+
+    def test_revision_for_sets_absolute_revision(self, tmp_path):
+        rd = tmp_path / "recipes"
+        _make_recipe(rd, "a", revision=1)
+        _make_recipe(rd, "b", deps=["a"], revision=1)
+
+        bumped = rev_bump("a", rd, revision_for=lambda r: r.cvc_revision + 3)
+        revs = {name: new for name, _old, new in bumped}
+        assert revs == {"a": 4, "b": 4}
+        assert Recipe.load(rd / "a").cvc_revision == 4
+
+    def test_revision_for_skips_when_not_advancing(self, tmp_path):
+        """A recipe whose resolved revision <= current is left untouched."""
+        rd = tmp_path / "recipes"
+        _make_recipe(rd, "a", revision=2)
+        _make_recipe(rd, "b", deps=["a"], revision=5)
+
+        # 'a' advances to 3; 'b' resolves to 3 (<= its 5) so it is skipped.
+        def resolver(r):
+            return 3
+
+        bumped = rev_bump("a", rd, revision_for=resolver)
+        names = {name for name, _o, _n in bumped}
+        assert names == {"a"}
+        assert Recipe.load(rd / "a").cvc_revision == 3
+        assert Recipe.load(rd / "b").cvc_revision == 5  # unchanged
+
+
+# ── CLI: cascade-bump and next-revision (mocked server) ─────────
+
+
+def _fake_client_by_name(name_to_versions, *, status=200, boom=False):
+    """httpx.Client stand-in that answers /v1/packages/{name} per name."""
+
+    class _Resp:
+        def __init__(self, payload):
+            self.status_code = status
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+    class _Client:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def get(self, url, params=None, headers=None):
+            if boom:
+                raise RuntimeError("connection refused")
+            name = url.rstrip("/").split("/")[-1]
+            org = (params or {}).get("org", "")
+            pkgs = [
+                {
+                    "name": name,
+                    "version": v,
+                    "platform": "linux",
+                    "arch": "x86_64",
+                    "build_type": "release",
+                    "link": "shared",
+                    "org": org,
+                }
+                for v in name_to_versions.get(name, [])
+            ]
+            return _Resp({"packages": pkgs})
+
+    return _Client
+
+
+class TestCascadeBumpCli:
+    def test_offline_bumps_by_one(self, tmp_path, capsys):
+        rd = tmp_path / "recipes"
+        _make_recipe(rd, "a")
+        _make_recipe(rd, "b", deps=["a"])
+        _make_recipe(rd, "c", deps=["b"])
+
+        ret = main(["cascade-bump", "a", "--recipes-dir", str(rd), "--offline"])
+        assert ret == 0
+        for name in ["a", "b", "c"]:
+            assert Recipe.load(rd / name).cvc_revision == 2
+
+    def test_published_aware_only_bumps_what_is_published(self, tmp_path, monkeypatch, capsys):
+        rd = tmp_path / "recipes"
+        _make_recipe(rd, "a", revision=1)
+        _make_recipe(rd, "b", deps=["a"], revision=1)
+        # 'a' is published at cvc.1; 'b' has never been published.
+        monkeypatch.setattr(
+            "httpx.Client",
+            _fake_client_by_name({"a": ["1.0.0+cvc.1"], "b": []}),
+        )
+
+        ret = main(["cascade-bump", "a", "--recipes-dir", str(rd), "--server", "http://x"])
+        assert ret == 0
+        assert Recipe.load(rd / "a").cvc_revision == 2  # published -> bump
+        assert Recipe.load(rd / "b").cvc_revision == 1  # unpublished -> unchanged
+        out = capsys.readouterr().out
+        assert "a: cvc_revision 1 → 2" in out
+
+
+class TestNextRevisionCli:
+    def test_prints_one_above_published(self, tmp_path, monkeypatch, capsys):
+        rd = tmp_path / "recipes"
+        _make_recipe(rd, "pkg", revision=1)
+        monkeypatch.setattr(
+            "httpx.Client", _fake_client_by_name({"pkg": ["1.0.0+cvc.2", "1.0.0+cvc.1"]})
+        )
+
+        ret = main(["next-revision", "pkg", "--recipes-dir", str(rd), "--server", "http://x"])
+        assert ret == 0
+        assert capsys.readouterr().out.strip() == "3"
+
+    def test_falls_back_to_floor_when_unreachable(self, tmp_path, monkeypatch, capsys):
+        rd = tmp_path / "recipes"
+        _make_recipe(rd, "pkg", revision=4)
+        monkeypatch.setattr("httpx.Client", _fake_client_by_name({}, boom=True))
+
+        ret = main(["next-revision", "pkg", "--recipes-dir", str(rd), "--server", "http://x"])
+        assert ret == 0
+        assert capsys.readouterr().out.strip() == "4"
