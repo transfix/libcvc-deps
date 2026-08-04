@@ -17,14 +17,32 @@ import pytest
 from cvcpkg.builder_gc import sweep_cache, sweep_work_dir
 
 
-def _job_dir(root: Path, name: str, *, size: int = 1024, age_seconds: float = 0) -> Path:
-    """Create a job-dir-shaped tree with a payload file, optionally backdated."""
+def _job_dir(
+    root: Path,
+    name: str,
+    *,
+    size: int = 1024,
+    age_seconds: float = 0,
+    top_only: bool = False,
+) -> Path:
+    """Create a job-dir-shaped tree with a payload file, optionally backdated.
+
+    ``age_seconds`` backdates the WHOLE tree, because that is what an abandoned
+    tree actually looks like.  ``top_only=True`` backdates only the top
+    directory and leaves the contents current — the shape of an *in-flight*
+    build, whose root mtime froze the moment ``build/`` was created while the
+    real work went on several levels down.  Ageing only the top used to be this
+    helper's sole behaviour, which is exactly why the sweep's own tests used to
+    agree with the bug.
+    """
     d = root / name
     (d / "build").mkdir(parents=True)
     (d / "build" / "blob").write_bytes(b"x" * size)
     if age_seconds:
         old = time.time() - age_seconds
-        os.utime(d, (old, old))
+        targets = [d] if top_only else [d / "build" / "blob", d / "build", d]
+        for target in targets:
+            os.utime(target, (old, old))
     return d
 
 
@@ -125,6 +143,90 @@ class TestSweepWorkDir:
         assert not mine.exists()
         assert (tmp_path / "someone-elses-data").is_dir()
         assert (tmp_path / "cvcpkg-recipe-cache").is_dir()
+
+    def test_in_flight_build_survives_however_long_it_runs(self, tmp_path):
+        # The 2026-08-04 incident, in miniature.  A build tree's TOP directory
+        # stops being modified as soon as build/ and install/ exist, so judging
+        # by the top mtime alone reaps a working tree — and raising the
+        # threshold only moves the cliff, since llvm18 alone declares
+        # timeout_seconds: 18000 (5 hours).
+        live = _job_dir(
+            tmp_path, "cvcpkg-job-haiku-image-b6wd0qrn", age_seconds=99999, top_only=True
+        )
+        dead = _job_dir(tmp_path, "cvcpkg-job-dead-bbb", age_seconds=99999)
+
+        res = sweep_work_dir(tmp_path, max_age_seconds=3600)
+
+        assert live.exists(), "an in-flight build must never be reaped"
+        assert not dead.exists(), "a genuinely abandoned tree must still be reaped"
+        assert res.removed == 1
+
+    def test_heartbeat_spares_a_tree_whose_every_mtime_is_stale(self, tmp_path):
+        # A build can be busy without touching the filesystem at all — a long
+        # link, a long test, a VM booting.  The heartbeat is the signal that
+        # covers that gap, and it is the only one an out-of-process reaper can
+        # rely on when the tree is quiet.
+        from cvcpkg.heartbeat import beat_once
+
+        quiet = _job_dir(tmp_path, "cvcpkg-job-linking-ccc", age_seconds=99999)
+        beat_once(quiet, label="linking")
+        # Backdate the root itself so ONLY the heartbeat file looks current;
+        # this proves the heartbeat is doing the work, not the root's mtime.
+        old = time.time() - 99999
+        os.utime(quiet, (old, old))
+
+        res = sweep_work_dir(tmp_path, max_age_seconds=3600)
+
+        assert quiet.exists(), "a fresh heartbeat must protect a quiet build"
+        assert res.removed == 0
+
+    def test_dead_process_heartbeat_does_not_protect_forever(self, tmp_path):
+        # The other direction: a heartbeat left behind by a process that died
+        # must not make its tree immortal, or builders fill their disks again.
+        from cvcpkg.heartbeat import HEARTBEAT_NAME, beat_once
+
+        stranded = _job_dir(tmp_path, "cvcpkg-job-killed-ddd")
+        beat_once(stranded, label="killed")
+        # A pid that cannot be running: 0 is never a normal process, and the
+        # host no longer matches either.
+        (stranded / HEARTBEAT_NAME).write_text("pid=0\nhost=some-other-builder\n", encoding="utf-8")
+        old = time.time() - 99999
+        for target in (
+            stranded / "build" / "blob",
+            stranded / "build",
+            stranded / HEARTBEAT_NAME,
+            stranded,
+        ):
+            os.utime(target, (old, old))
+
+        res = sweep_work_dir(tmp_path, max_age_seconds=3600)
+
+        assert not stranded.exists()
+        assert res.removed == 1
+
+    def test_a_live_pid_stops_protecting_once_its_heartbeat_is_ancient(self, tmp_path):
+        # Every cvcpkg process is `python3` and builders live for weeks, so the
+        # pid space eventually wraps and a stranded heartbeat starts naming an
+        # unrelated live process.  Believing it forever would make the tree
+        # immortal, which is how disks fill.
+        from cvcpkg.builder_gc import _PID_TRUST_SECONDS
+        from cvcpkg.heartbeat import HEARTBEAT_NAME, beat_once
+
+        stranded = _job_dir(tmp_path, "cvcpkg-job-wrapped-eee")
+        beat_once(stranded, label="wrapped")  # records THIS process, alive
+        old = time.time() - (_PID_TRUST_SECONDS + 3600)
+        for target in (
+            stranded / "build" / "blob",
+            stranded / "build",
+            stranded / HEARTBEAT_NAME,
+            stranded,
+        ):
+            os.utime(target, (old, old))
+
+        res = sweep_work_dir(tmp_path, max_age_seconds=3600)
+
+        assert not stranded.exists(), "a pid outlives its credibility"
+        assert res.removed == 1
 
     def test_dry_run_reports_without_deleting(self, tmp_path):
         d = _job_dir(tmp_path, "cvcpkg-job-zlib-aaa", size=4096)
