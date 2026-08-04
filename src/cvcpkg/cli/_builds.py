@@ -1498,10 +1498,15 @@ def builds_submit_dag(
                         # Same treatment for build.min_disk_gb: tell the
                         # operator NOW that nothing in the fleet has room for
                         # haiku-image, instead of after an hour of build.
+                        # The recipe's capabilities ride along so the space and
+                        # the capability have to come from ONE builder, exactly
+                        # as the server's _choose_builder requires — a roomy
+                        # CPU box must not make a cuda recipe look placeable.
                         _undersized = [
                             n
                             for n in eligible
-                            if _min_disk(n) and not _has_builder(plat, ar, None, _min_disk(n))
+                            if _min_disk(n)
+                            and not _has_builder(plat, ar, _required_caps(n), _min_disk(n))
                         ]
                         if _undersized:
                             click.echo(
@@ -1584,7 +1589,7 @@ def builds_submit_dag(
                             n
                             for n in eligible
                             if _min_disk(n)
-                            and not _has_builder(*_noarch_target, None, _min_disk(n))
+                            and not _has_builder(*_noarch_target, _required_caps(n), _min_disk(n))
                         ]
                         if _undersized:
                             click.echo(

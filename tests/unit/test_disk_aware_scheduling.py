@@ -683,11 +683,12 @@ class TestFleetFreeDisk:
 # matching test_capability_routing.py.
 
 
-def _write_disk_recipe(tmp_path, name, min_disk=None, platforms=("linux",)):
+def _write_disk_recipe(tmp_path, name, min_disk=None, platforms=("linux",), caps=()):
     """A minimal recipe, optionally declaring build.min_disk_gb."""
     rdir = tmp_path / "recipes" / name
     rdir.mkdir(parents=True)
     disk_line = f"  min_disk_gb: {min_disk}\n" if min_disk else ""
+    caps_block = "requires_capabilities:\n" + "".join(f"  - {c}\n" for c in caps) if caps else ""
     matrix = "".join(f"    - platform: {p}\n      script: build.sh\n" for p in platforms)
     (rdir / "recipe.yaml").write_text(
         f"""schema_version: 1
@@ -695,7 +696,7 @@ recipe:
   name: {name}
   upstream_version: "1.0.0"
   cvc_revision: 1
-build:
+{caps_block}build:
 {disk_line}  matrix:
 {matrix}"""
     )
@@ -854,3 +855,48 @@ class TestSubmitDagDiskPropagation:
         )
         names = {j["recipe_name"] for b in posted for j in b["jobs"]}
         assert names == {"zlib"}
+
+    def test_space_and_capability_must_come_from_the_same_builder(self, tmp_path, monkeypatch):
+        """A recipe needing BOTH cuda and 35 GiB is not placeable by two hosts.
+
+        The cuda box is too small and the roomy box has no cuda, so the
+        server's ``_choose_builder`` would never pair this job with either.
+        Checking the two requirements independently would let submit-dag post a
+        job that then sits pending forever — the disk filter is deliberately
+        excluded from the unschedulable reaper, so nothing ever fails it.
+        """
+        _write_disk_recipe(tmp_path, "cuda-monster", min_disk=35, caps=("cuda",))
+        cuda_small = {
+            "platform": "linux",
+            "arch": "x86_64",
+            "capabilities": {"cuda": True},
+            "free_disk_gb": 26,
+        }
+        roomy_no_cuda = {
+            "platform": "linux",
+            "arch": "x86_64",
+            "capabilities": {},
+            "free_disk_gb": 500,
+        }
+        posted: list = []
+        assert (
+            _submit_dag(tmp_path, monkeypatch, posted, [cuda_small, roomy_no_cuda], "cuda-monster")
+            == 0
+        )
+        assert [j for b in posted for j in b["jobs"]] == []
+
+    def test_one_builder_with_both_still_submits(self, tmp_path, monkeypatch):
+        """Control for the above: the combined check must not over-skip."""
+        _write_disk_recipe(tmp_path, "cuda-monster", min_disk=35, caps=("cuda",))
+        cuda_big = {
+            "platform": "linux",
+            "arch": "x86_64",
+            "capabilities": {"cuda": True},
+            "free_disk_gb": 500,
+        }
+        posted: list = []
+        assert _submit_dag(tmp_path, monkeypatch, posted, [cuda_big], "cuda-monster") == 0
+        jobs = [j for b in posted for j in b["jobs"]]
+        assert len(jobs) == 1
+        assert jobs[0]["min_disk_gb"] == 35
+        assert "cuda" in jobs[0]["required_capabilities"]
