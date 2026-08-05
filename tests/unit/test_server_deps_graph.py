@@ -138,25 +138,52 @@ class TestDepsGraphIncludesPushedRecipes:
         assert "beta" in after["forward"], "cache served a stale graph after a push"
         assert "beta" in after["reverse"].get("alpha", [])
 
-    def test_malformed_bundle_does_not_blank_the_graph(self, server_env):
-        """One bad bundle must not take out every other package's deps."""
+    def test_corrupt_bundle_does_not_blank_the_graph(self, server_env, tmp_path):
+        """One unreadable bundle must not take out every other package's deps.
+
+        The bundle is corrupted ON DISK rather than uploaded malformed: the
+        upload endpoint may reject a bad tarball outright, in which case
+        nothing bad is ever stored and the guard under test is never reached.
+        On-disk corruption is also the realistic failure — a truncated or
+        half-written file in the recipe store.
+        """
         client, admin_token = server_env
         hdr = {"Authorization": f"Bearer {admin_token}"}
 
-        good = client.post(
+        for name in ("good", "rotten"):
+            resp = client.post(
+                f"/v1/recipes/{name}",
+                headers=hdr,
+                files={
+                    "file": (
+                        f"{name}.tar.gz",
+                        _recipe_bundle(name, ["zlib"]),
+                        "application/gzip",
+                    )
+                },
+            )
+            if resp.status_code == 501:
+                pytest.skip("recipe distribution requires a DB backend")
+            assert resp.status_code in (200, 201), resp.text
+
+        # Both are visible to start with.
+        before = client.get("/v1/deps").json()
+        assert "good" in before["forward"]
+        assert "rotten" in before["forward"]
+
+        # Corrupt one stored bundle in place, and bust the cache by touching
+        # the row (a re-push updates updated_at).
+        stored = [p for p in tmp_path.rglob("*.tar.gz") if "rotten" in p.name]
+        assert stored, "could not locate the stored bundle to corrupt"
+        for p in stored:
+            p.write_bytes(b"not a gzip stream at all")
+
+        client.post(
             "/v1/recipes/good",
             headers=hdr,
             files={"file": ("good.tar.gz", _recipe_bundle("good", ["zlib"]), "application/gzip")},
         )
-        if good.status_code == 501:
-            pytest.skip("recipe distribution requires a DB backend")
-
-        client.post(
-            "/v1/recipes/bad",
-            headers=hdr,
-            files={"file": ("bad.tar.gz", b"this is not a gzip tarball", "application/gzip")},
-        )
 
         after = client.get("/v1/deps")
-        assert after.status_code == 200
-        assert "good" in after.json()["forward"], "a malformed bundle blanked the graph"
+        assert after.status_code == 200, "a corrupt bundle 500'd the whole endpoint"
+        assert "good" in after.json()["forward"], "a corrupt bundle blanked the graph"
