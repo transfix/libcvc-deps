@@ -54,17 +54,32 @@ def _recipe_bundle(name: str, runtime_deps: list[str]) -> bytes:
     return buf.getvalue()
 
 
-@pytest.fixture()
-def server_env(tmp_path, monkeypatch):
-    # Recipe distribution (and therefore the pushed half of the graph) needs a
-    # DB backend; without one the upload endpoint 501s. Tokens must be seeded
-    # into the DB too — the file-backed TokenStore is not consulted then.
-    db_url = f"sqlite+aiosqlite:///{tmp_path / 'deps.db'}"
-    monkeypatch.setenv("CVCPKG_DATABASE_URL", db_url)
-    monkeypatch.delenv("CVCPKG_MIRROR_MODE", raising=False)
+@pytest.fixture(scope="module")
+def server_env(tmp_path_factory):
+    """One server + DB for the whole module.
+
+    Deliberately module-scoped. A per-test fixture stands up three separate
+    apps, DB engines and TestClient portal threads, and doing that at the tail
+    of the full unit run under coverage killed the pytest process outright on
+    CI (exit 141 / SIGPIPE) AFTER all three tests had passed — a green test
+    file that took the runner down with it. The tests do not need isolation
+    from each other: each uses distinct recipe names, and the assertions are
+    about what the graph contains, not what it lacks globally.
+    """
+    import os
 
     from cvcpkg.server.db import create_tables, dispose_engine, init_db
     from cvcpkg.server.db_stores import DbTokenStore
+
+    tmp_path = tmp_path_factory.mktemp("deps-graph")
+    db_url = f"sqlite+aiosqlite:///{tmp_path / 'deps.db'}"
+    # Recipe distribution (and therefore the pushed half of the graph) needs a
+    # DB backend; without one the upload endpoint 501s. Tokens must be seeded
+    # into the DB too — the file-backed TokenStore is not consulted then.
+    prev_db = os.environ.get("CVCPKG_DATABASE_URL")
+    prev_mirror = os.environ.get("CVCPKG_MIRROR_MODE")
+    os.environ["CVCPKG_DATABASE_URL"] = db_url
+    os.environ.pop("CVCPKG_MIRROR_MODE", None)
 
     async def _seed():
         init_db(db_url)
@@ -75,13 +90,26 @@ def server_env(tmp_path, monkeypatch):
 
     admin_token = asyncio.run(_seed())
     app = create_app(state_dir=tmp_path)
-    with TestClient(app) as client:
-        yield client, admin_token
+    try:
+        with TestClient(app) as client:
+            yield client, admin_token, tmp_path
+    finally:
+        # Leave no global engine pointing at a tmp dir pytest is about to remove.
+        try:
+            asyncio.run(dispose_engine())
+        except Exception:
+            pass
+        if prev_db is None:
+            os.environ.pop("CVCPKG_DATABASE_URL", None)
+        else:
+            os.environ["CVCPKG_DATABASE_URL"] = prev_db
+        if prev_mirror is not None:
+            os.environ["CVCPKG_MIRROR_MODE"] = prev_mirror
 
 
 class TestDepsGraphIncludesPushedRecipes:
     def test_pushed_recipe_appears_in_graph(self, server_env):
-        client, admin_token = server_env
+        client, admin_token, _tmp = server_env
         hdr = {"Authorization": f"Bearer {admin_token}"}
 
         before = client.get("/v1/deps").json()
@@ -115,7 +143,7 @@ class TestDepsGraphIncludesPushedRecipes:
 
     def test_cache_invalidates_on_a_later_push(self, server_env):
         """A second push must be visible immediately, not hidden by the cache."""
-        client, admin_token = server_env
+        client, admin_token, _tmp = server_env
         hdr = {"Authorization": f"Bearer {admin_token}"}
 
         first = client.post(
@@ -138,7 +166,7 @@ class TestDepsGraphIncludesPushedRecipes:
         assert "beta" in after["forward"], "cache served a stale graph after a push"
         assert "beta" in after["reverse"].get("alpha", [])
 
-    def test_corrupt_bundle_does_not_blank_the_graph(self, server_env, tmp_path):
+    def test_corrupt_bundle_does_not_blank_the_graph(self, server_env):
         """One unreadable bundle must not take out every other package's deps.
 
         The bundle is corrupted ON DISK rather than uploaded malformed: the
@@ -147,7 +175,7 @@ class TestDepsGraphIncludesPushedRecipes:
         On-disk corruption is also the realistic failure — a truncated or
         half-written file in the recipe store.
         """
-        client, admin_token = server_env
+        client, admin_token, tmp_path = server_env
         hdr = {"Authorization": f"Bearer {admin_token}"}
 
         for name in ("good", "rotten"):
