@@ -121,6 +121,18 @@ jobs:
   build-bsd:
     name: Build (${{ matrix.os }})
     runs-on: ["self-hosted", "Linux", "X64", "cvcpkg-builder"]
+    # NetBSD cannot produce a binary with stock PyInstaller. It ships no NetBSD
+    # bootloader, so pip compiles one, and bootloader/wscript has no 'netbsd' in
+    # its DESTOS_TO_SYSTEM table:
+    #
+    #   File ".../bootloader/wscript", line 456, in configure
+    #   KeyError: 'netbsd'
+    #   ERROR: Failed compiling the bootloader. Please compile manually and rerun
+    #
+    # Upstream gap, not ours. Let that one column fail without failing the run,
+    # so linux/macos/windows/freebsd/openbsd still publish. Remove once a
+    # NetBSD-aware PyInstaller is available.
+    continue-on-error: ${{ matrix.os == 'netbsd-x86_64' }}
     strategy:
       fail-fast: false
       matrix:
