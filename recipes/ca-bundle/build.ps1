@@ -9,11 +9,10 @@ $CERT_URL = "https://curl.se/ca/cacert-2026-05-14.pem"
 $CERT_SHA256 = "86a1f3366afac7c6f8ae9f3c779ac221129328c43f0ab2b8817eb2f362a5025c"
 
 $SslDir   = Join-Path $env:CVC_INSTALL_DIR "etc/ssl"
-$CertDir  = Join-Path $SslDir "certs"
 $ShareDir = Join-Path $env:CVC_INSTALL_DIR "share/ca-bundle"
 $CertPath = Join-Path $SslDir "cert.pem"
 
-New-Item -ItemType Directory -Force -Path $CertDir, $ShareDir | Out-Null
+New-Item -ItemType Directory -Force -Path $SslDir, $ShareDir | Out-Null
 
 # Download the CA bundle
 Invoke-WebRequest -Uri $CERT_URL -OutFile $CertPath -UseBasicParsing
@@ -25,22 +24,14 @@ if ($ACTUAL_SHA256 -ne $CERT_SHA256) {
     exit 1
 }
 
-# One symlink per certificate in the bundle, populating etc/ssl/certs/.
-# Targets are RELATIVE on purpose: cvcpkg's extraction filter rejects
-# absolute link targets and aborts the pack (see recipes/bzip2/build.sh).
-#
-# NOTE: numbered rather than subject-hash named, so OpenSSL's SSL_CERT_DIR
-# lookup does not actually consult them -- SSL_CERT_FILE is what makes
-# verification work.  Behaviour preserved from the original script.
-$n = 0
-foreach ($line in (Get-Content $CertPath)) {
-    if ($line -match '^-----BEGIN CERTIFICATE-----') {
-        $n++
-        $link = Join-Path $CertDir "$n.pem"
-        if (Test-Path $link) { Remove-Item $link -Force }
-        New-Item -ItemType SymbolicLink -Path $link -Target "../cert.pem" | Out-Null
-    }
-}
+$n = (Select-String -Path $CertPath -Pattern '^-----BEGIN CERTIFICATE-----' -AllMatches).Count
+
+# No etc/ssl/certs/ directory is produced, on purpose -- see the "Usage" note
+# in recipe.yaml.  SSL_CERT_DIR resolves certificates only through OpenSSL's
+# hashed-directory lookup (<subject-hash>.<seq>), which requires c_rehash and
+# therefore an openssl binary at build time; SSL_CERT_FILE covers the use case
+# with the single bundle.  This also keeps the recipe free of symlink creation,
+# which on Windows needs Developer Mode or an elevated process.
 
 # Convenience env hook.  Single-quoted here-string: nothing is expanded at
 # build time.  The hook derives the prefix from its OWN path
@@ -48,10 +39,11 @@ foreach ($line in (Get-Content $CertPath)) {
 # because the package is unpacked at whatever prefix the consumer chooses.
 @'
 # ca-bundle environment hook -- source this to point OpenSSL at the bundled certs
+# SSL_CERT_DIR is deliberately not set: this package ships only the single-file
+# bundle, and an unhashed directory would never be read by OpenSSL anyway.
 _ca_bundle_self="${BASH_SOURCE[0]:-$0}"
 _ca_bundle_prefix="$(cd "$(dirname "${_ca_bundle_self}")/../.." && pwd)"
 export SSL_CERT_FILE="${_ca_bundle_prefix}/etc/ssl/cert.pem"
-export SSL_CERT_DIR="${_ca_bundle_prefix}/etc/ssl/certs"
 unset _ca_bundle_self _ca_bundle_prefix
 '@ | Out-File -FilePath (Join-Path $ShareDir "env.sh") -Encoding ascii
 
