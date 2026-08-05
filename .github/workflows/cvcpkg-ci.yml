@@ -218,31 +218,6 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # This job builds images (including a chromium-carrying playwright image)
-      # on a LONG-LIVED self-hosted runner, and nothing ever reclaimed the build
-      # cache it leaves behind. It eventually filled the disk and the job began
-      # failing at image build time with, twice running:
-      #
-      #     ERROR: Could not install packages due to an OSError:
-      #            [Errno 28] No space left on device
-      #
-      # deploy-prod.yml already prunes the PRIMARY over SSH; nothing pruned this
-      # host, which is the mirror + deploy runner.
-      #
-      # Deliberately conservative: builder cache and dangling images only.
-      # NOT `system prune -a --volumes` — this box also runs the mirror, and
-      # removing unused volumes there could take out data that merely happens
-      # not to be attached at this instant. Build cache is the thing that grows
-      # without bound and the thing nothing else owns.
-      - name: Reclaim Docker build cache
-        run: |
-          set -uo pipefail
-          echo "Before: $(df -h / | tail -1)"
-          docker builder prune -af --filter 'until=24h' 2>/dev/null || true
-          docker image prune -f 2>/dev/null || true
-          echo "After:  $(df -h / | tail -1)"
-          docker system df 2>/dev/null || true
-
       - name: Start test stack
         working-directory: .
         run: |
