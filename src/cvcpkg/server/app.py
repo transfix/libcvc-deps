@@ -2628,9 +2628,7 @@ def create_app(
         out: list[tuple[str, dict]] = []
         for info in infos:
             try:
-                bundle_path = await _db_recipes.get_bundle_path(
-                    info.name, org_slug=info.org_slug
-                )
+                bundle_path = await _db_recipes.get_bundle_path(info.name, org_slug=info.org_slug)
                 if not bundle_path or not Path(bundle_path).is_file():
                     continue
                 with tarfile.open(bundle_path, "r:gz") as tar:
@@ -2698,9 +2696,7 @@ def create_app(
             recipes = [by_name[n] for n in sorted(by_name)]
 
         if not recipes:
-            return JSONResponse(
-                {"forward": {}, "reverse": {}, "meta": {}, "recipe_names": []}
-            )
+            return JSONResponse({"forward": {}, "reverse": {}, "meta": {}, "recipe_names": []})
 
         forward: dict[str, list[str]] = {}
         meta: dict[str, dict] = {}

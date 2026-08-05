@@ -31,7 +31,7 @@ def _recipe_bundle(name: str, runtime_deps: list[str]) -> bytes:
         [
             "schema_version: 1",
             "recipe:",
-            f'  name: {name}',
+            f"  name: {name}",
             '  upstream_version: "1.0.0"',
             "  cvc_revision: 1",
             f'  description: "{name} test recipe"',
@@ -90,7 +90,9 @@ class TestDepsGraphIncludesPushedRecipes:
         resp = client.post(
             "/v1/recipes/widget",
             headers=hdr,
-            files={"file": ("widget.tar.gz", _recipe_bundle("widget", ["zlib"]), "application/gzip")},
+            files={
+                "file": ("widget.tar.gz", _recipe_bundle("widget", ["zlib"]), "application/gzip")
+            },
         )
         if resp.status_code == 501:
             pytest.skip("recipe distribution requires a DB backend")
