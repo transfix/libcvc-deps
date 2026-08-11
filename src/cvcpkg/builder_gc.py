@@ -252,6 +252,24 @@ def _candidates(work_dir: Path) -> list[Path]:
     return found
 
 
+def _rmtree(path: Path) -> None:
+    """``shutil.rmtree`` with a short retry, because Windows deletion is racy.
+
+    On NTFS a file with any open handle (antivirus scanners take transient
+    ones) fails its unlink, ``ignore_errors`` swallows it, and the partial
+    tree survives the sweep -- observed as a flaky
+    ``test_a_live_pid_stops_protecting_once_its_heartbeat_is_ancient`` on the
+    windows-latest runner.  A couple of spaced retries is the standard cure;
+    POSIX succeeds on the first pass and never sleeps.
+    """
+    for attempt in range(3):
+        if attempt:
+            time.sleep(0.2)
+        shutil.rmtree(path, ignore_errors=True)
+        if not path.exists():
+            return
+
+
 def sweep_work_dir(
     work_dir: Path | str,
     *,
@@ -294,9 +312,9 @@ def sweep_work_dir(
             continue
         size = _dir_size(path)
         if not dry_run:
-            shutil.rmtree(path, ignore_errors=True)
-            # rmtree(ignore_errors) can leave a partial tree behind; only count
-            # it as reclaimed when the directory is actually gone.
+            _rmtree(path)
+            # Even with retries a partial tree can survive; only count it as
+            # reclaimed when the directory is actually gone.
             if path.exists():
                 continue
         result.removed += 1
@@ -341,7 +359,7 @@ def sweep_cache(
             continue
         size = _dir_size(entry)
         if not dry_run:
-            shutil.rmtree(entry, ignore_errors=True)
+            _rmtree(entry)
             if entry.exists():
                 continue
         result.removed += 1
