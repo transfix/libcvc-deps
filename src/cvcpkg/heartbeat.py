@@ -220,6 +220,15 @@ def watch(root: Path | str, *, label: str = "") -> None:
         if _thread is None or not _thread.is_alive():
             _thread = threading.Thread(target=_run, name="cvcpkg-heartbeat", daemon=True)
             _thread.start()
+    # Wake the shared thread so it adopts the new root NOW.  Without this a
+    # thread already parked in its interval wait -- up to 60 s, e.g. left
+    # over from an earlier build_all whose watch deliberately outlives a
+    # raise -- would not beat the new root (nor re-read a changed
+    # CVCPKG_HEARTBEAT_INTERVAL) until that wait expired.  Seen as a real
+    # failure: the macos-latest suite runs ~2900 tests in one process, an
+    # earlier test left such a parked thread, and a freshly watched tree got
+    # no beat for the whole 10 s assertion window.
+    _wake.set()
 
 
 def unwatch(root: Path | str) -> None:

@@ -145,6 +145,35 @@ class TestWatcher:
         time.sleep(0.3)
         assert hb.stat().st_mtime_ns == settled, "unwatch must stop the beats"
 
+    def test_watch_wakes_a_parked_thread_for_the_new_root(self, tmp_path, monkeypatch):
+        # The shared thread parks in an interval wait between beats.  A root
+        # watched MID-WAIT must not sit beatless until that wait expires: in
+        # the full suite an earlier test left a thread parked on the default
+        # 60 s interval and a freshly watched tree got zero beats for the
+        # whole assertion window (macos-latest, py3.10 and py3.12).  watch()
+        # must wake the thread, which also makes it re-read the interval.
+        monkeypatch.setenv("CVCPKG_HEARTBEAT_INTERVAL", "60")
+        parked = _build_tree(tmp_path, "cvcpkg-parked-eee")
+        watch(parked, label="parked")
+        try:
+            time.sleep(0.2)  # let the thread reach its 60 s wait
+            monkeypatch.setenv("CVCPKG_HEARTBEAT_INTERVAL", "0.05")
+            fresh = _build_tree(tmp_path, "cvcpkg-fresh-fff")
+            hb = fresh / HEARTBEAT_NAME
+            watch(fresh, label="fresh")
+            try:
+                first = hb.stat().st_mtime_ns
+                deadline = time.time() + 10
+                while time.time() < deadline and hb.stat().st_mtime_ns == first:
+                    time.sleep(0.05)
+                assert (
+                    hb.stat().st_mtime_ns != first
+                ), "a root watched while the thread was parked never got a beat"
+            finally:
+                unwatch(fresh)
+        finally:
+            unwatch(parked)
+
     def test_one_thread_serves_every_watched_tree(self, tmp_path, monkeypatch):
         # The builder daemon runs thousands of jobs in one process; a thread
         # per job would be an unbounded leak.
