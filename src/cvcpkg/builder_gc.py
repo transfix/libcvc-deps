@@ -262,9 +262,11 @@ def _rmtree(path: Path) -> None:
     windows-latest runner.  A couple of spaced retries is the standard cure;
     POSIX succeeds on the first pass and never sleeps.
     """
-    for attempt in range(3):
+    delay = 0.1
+    for attempt in range(5):
         if attempt:
-            time.sleep(0.2)
+            time.sleep(delay)
+            delay *= 2
         shutil.rmtree(path, ignore_errors=True)
         if not path.exists():
             return

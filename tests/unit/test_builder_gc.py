@@ -225,7 +225,27 @@ class TestSweepWorkDir:
 
         res = sweep_work_dir(tmp_path, max_age_seconds=3600)
 
-        assert not stranded.exists(), "a pid outlives its credibility"
+        if stranded.exists():  # pragma: no cover - forensics for a CI-only failure
+            # Seen only on windows-latest, cause not yet reproduced locally.
+            # Distinguish "the sweep judged it active" from "rmtree could not
+            # delete it": re-run the deletion WITHOUT suppression so the real
+            # OSError (file + winerror) reaches the report.
+            import shutil as _sh
+
+            from cvcpkg.builder_gc import _is_active
+
+            survivors = [str(q.relative_to(tmp_path)) for q in stranded.rglob("*")]
+            active = _is_active(stranded, time.time() - 3600)
+            err = ""
+            try:
+                _sh.rmtree(stranded)
+            except OSError as exc:  # noqa: BLE001
+                err = repr(exc)
+            raise AssertionError(
+                "a pid outlives its credibility: "
+                f"is_active={active} removed={res.removed} survivors={survivors} "
+                f"unsuppressed_rmtree={err or 'succeeded on retry'}"
+            )
         assert res.removed == 1
 
     def test_dry_run_reports_without_deleting(self, tmp_path):
