@@ -34,10 +34,15 @@ REAPER = Path(__file__).resolve().parents[2] / "scripts" / "reap-stale-build-dir
 
 
 def _backdate(path: Path, seconds: float) -> None:
-    """Backdate every entry in *path*, deepest first."""
+    """Backdate every entry in *path*, deepest first.
+
+    Plain ``os.utime`` (following symlinks) on purpose: the fixture trees
+    contain no symlinks, and ``follow_symlinks=False`` raises
+    ``NotImplementedError`` for ``utime`` on Windows.
+    """
     old = time.time() - seconds
     for p in sorted(path.rglob("*"), key=lambda q: len(q.parts), reverse=True):
-        os.utime(p, (old, old), follow_symlinks=False)
+        os.utime(p, (old, old))
     os.utime(path, (old, old))
 
 
@@ -120,19 +125,25 @@ class TestWatcher:
         tree = _build_tree(tmp_path, "cvcpkg-slow-ccc")
         _backdate(tree, 99999)
 
+        # Liveness is probed via the heartbeat FILE's mtime_ns: every beat
+        # rewrites it via os.replace, so one beat changes it.  The recorded
+        # ``beat=`` value is integer SECONDS — comparing it needs the wall
+        # clock to roll a second AND the thread to be scheduled in time,
+        # which flaked on a loaded macOS runner (equal after a 5 s window).
+        hb = tree / HEARTBEAT_NAME
         watch(tree, label="slow")
         try:
-            first = read_heartbeat(tree)["beat"]
-            deadline = time.time() + 5
-            while time.time() < deadline and read_heartbeat(tree)["beat"] == first:
+            first = hb.stat().st_mtime_ns
+            deadline = time.time() + 10
+            while time.time() < deadline and hb.stat().st_mtime_ns == first:
                 time.sleep(0.05)
-            assert read_heartbeat(tree)["beat"] != first, "the watcher stopped beating"
+            assert hb.stat().st_mtime_ns != first, "the watcher stopped beating"
         finally:
             unwatch(tree)
 
-        settled = read_heartbeat(tree)["beat"]
+        settled = hb.stat().st_mtime_ns
         time.sleep(0.3)
-        assert read_heartbeat(tree)["beat"] == settled, "unwatch must stop the beats"
+        assert hb.stat().st_mtime_ns == settled, "unwatch must stop the beats"
 
     def test_one_thread_serves_every_watched_tree(self, tmp_path, monkeypatch):
         # The builder daemon runs thousands of jobs in one process; a thread
@@ -161,6 +172,11 @@ class TestWatcher:
 
 
 @pytest.mark.skipif(not REAPER.exists(), reason="reaper script not present")
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="the reaper script runs on the POSIX build hosts (deploy-prod ssh cleanup); "
+    "Windows builders never execute it, and Git Bash's sh cannot see Windows pids",
+)
 class TestReaperScript:
     def test_spares_an_in_flight_build_and_reaps_an_abandoned_one(self, tmp_path):
         # The incident, end to end, through the exact delivery the workflow
