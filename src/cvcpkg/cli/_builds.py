@@ -1171,22 +1171,41 @@ def builds_submit_dag(
                     names.append(dep["name"])
         return names
 
-    def _has_platform_entry(name: str, plat: str) -> bool:
-        """Check if a recipe has a build matrix entry for the platform."""
+    def _matrix_platforms(name: str) -> list[str]:
         data = recipe_data.get(name, {})
-        matrix = data.get("build", {}).get("matrix", [])
-        return any(entry.get("platform") in (plat, "any") for entry in matrix)
+        return [entry.get("platform", "") for entry in data.get("build", {}).get("matrix", [])]
 
-    def _is_any(name: str) -> bool:
-        """True if *name* is platform-independent (every matrix entry is 'any').
+    def _has_explicit_platform_entry(name: str, plat: str) -> bool:
+        """True if *name* has a matrix entry naming *plat* itself.
 
-        Such a recipe ships one noarch bundle valid on every host, so it is
-        scheduled once (platform=any/arch=noarch) instead of fanned out per
-        concrete platform.
+        The concrete per-platform passes key off THIS rather than "can build
+        for plat at all":
+        a target that merely falls through to the `any` entry is covered by the
+        single noarch job, and scheduling it per platform as well is what
+        published one host-tagged bundle per platform for packages that should
+        have shipped a single noarch one.
         """
-        data = recipe_data.get(name, {})
-        matrix = data.get("build", {}).get("matrix", [])
-        return bool(matrix) and all(entry.get("platform") == "any" for entry in matrix)
+        return plat in _matrix_platforms(name)
+
+    def _has_any_entry(name: str) -> bool:
+        """True if *name* has an `any` entry, i.e. it publishes a noarch bundle.
+
+        Such a recipe is scheduled once (platform=any/arch=noarch) for every
+        target that entry serves, instead of being fanned out per platform.  It
+        may ALSO have explicit entries (a pure-Python column with a `windows`
+        script); those are scheduled separately by the per-platform passes.
+        """
+        return "any" in _matrix_platforms(name)
+
+    def _has_explicit_entry(name: str) -> bool:
+        """True if *name* has at least one entry naming a concrete platform."""
+        return any(p and p != "any" for p in _matrix_platforms(name))
+
+    def _serves_via_any(name: str, plat: str) -> bool:
+        """True if *name*'s build for *plat* comes from its `any` entry."""
+        from cvcpkg.platform import served_by_any_entry
+
+        return served_by_any_entry(_matrix_platforms(name), plat)
 
     # Linux bundles must run on the fleet's OLDEST glibc, not merely on the
     # machine that happened to build them: glibc is backward- but not
@@ -1196,8 +1215,27 @@ def builds_submit_dag(
     from cvcpkg.glibc import capability_name as _glibc_cap
     from cvcpkg.glibc import target_floor as _glibc_floor
 
-    def _platform_caps(plat: str) -> list[str]:
-        return [_glibc_cap(_glibc_floor())] if plat == "linux" else []
+    def _platform_caps(name: str, plat: str) -> list[str]:
+        """The floor capability a linux job needs, unless the payload is prebuilt.
+
+        The floor capability is a proxy for "whatever this builder COMPILES
+        will not demand symbols older than its own glibc".  A recipe that
+        compiles nothing — `prebuilt_payload`, e.g. a manylinux wheel repack —
+        has a floor fixed by whoever built the binary, so the proxy is a
+        category error there, and an expensive one: it composes with the
+        recipe's own `requires_capabilities`, and `cuda` + `glibc2.35` is
+        satisfied by no builder on this fleet (the one CUDA host runs 2.39),
+        which left torch-cp311-cuda permanently `unschedulable`.
+
+        Dropping it costs no safety: stage_bundle's floor gate still scans the
+        real staged tree against the same floor and raises, so the failure
+        mode is a loud build error, never a bundle that will not start.
+        """
+        if plat != "linux":
+            return []
+        if recipe_data.get(name, {}).get("prebuilt_payload"):
+            return []
+        return [_glibc_cap(_glibc_floor())]
 
     def _required_caps(name: str) -> list[str]:
         """A recipe's top-level requires_capabilities (e.g. ['cuda']).
@@ -1412,13 +1450,16 @@ def builds_submit_dag(
         seen.difference_update(seeds)
         return seen
 
-    # Partition the requested recipes: platform-independent ('any') recipes are
-    # scheduled once as a single noarch DAG (below); everything else fans out
-    # per concrete platform/arch.  Keeping the 'any' recipes out of the
-    # per-platform DAGs is what prevents the arch-pinned mispublish (one
-    # linux-x86_64 bundle, one macos-arm64 bundle, ...) of a noarch package.
-    any_names = [n for n in recipe_names if _is_any(n)]
-    concrete_names = [n for n in recipe_names if not _is_any(n)]
+    # Split the requested recipes by what each BUILD produces, not by what the
+    # recipe as a whole looks like.  A recipe with an `any` entry is scheduled
+    # once as noarch for every target that entry serves; a recipe with explicit
+    # platform entries also fans out over those platforms.  The two sets
+    # OVERLAP: a pure-Python column carrying `any` (build.sh) plus `windows`
+    # (build.ps1) belongs in both — one noarch bundle for the POSIX targets and
+    # one windows bundle — and that overlap is what keeps the `any` entry's
+    # targets from being mispublished as one arch-pinned bundle per platform.
+    any_names = [n for n in recipe_names if _has_any_entry(n)]
+    concrete_names = [n for n in recipe_names if _has_explicit_entry(n)]
 
     dag_ids: list[str] = []
 
@@ -1466,9 +1507,19 @@ def builds_submit_dag(
                     # wasm/wasi/cosmo only support static linking.
                     if plat in _static_only_platforms and lnk != "static":
                         continue
-                    # Filter recipes: skip those with no matrix entry
-                    eligible = [n for n in concrete_names if _has_platform_entry(n, plat)]
-                    skipped = set(concrete_names) - set(eligible)
+                    # Filter recipes: only those with an entry naming THIS
+                    # platform.  A recipe that reaches `plat` through its `any`
+                    # entry is built once in the noarch pass instead.
+                    eligible = [n for n in concrete_names if _has_explicit_platform_entry(n, plat)]
+                    # Report only what this platform genuinely loses.  A recipe
+                    # covered by the noarch pass is not "skipped" — it is built
+                    # once, for every platform its `any` entry serves — and
+                    # listing it here reads as a gap in the run when it is not.
+                    skipped = {
+                        n
+                        for n in set(concrete_names) - set(eligible)
+                        if not _serves_via_any(n, plat)
+                    }
                     if skipped:
                         click.echo(
                             f"  Skipping {len(skipped)} recipe(s) "
@@ -1533,7 +1584,7 @@ def builds_submit_dag(
                                 ):
                                     unbuildable.append(dep)
                                 continue
-                            if _is_any(dep):
+                            if _serves_via_any(dep, plat):
                                 # A noarch dep is scheduled in the noarch pass
                                 # below, and now lands in the SAME submitted DAG
                                 # as this job — so pull it in and let the edge
@@ -1545,7 +1596,7 @@ def builds_submit_dag(
                                     any_names.append(dep)
                                     cross_noarch.append(dep)
                                 continue
-                            if not _has_platform_entry(dep, plat):
+                            if not _has_explicit_platform_entry(dep, plat):
                                 # Has a recipe but no build for this platform:
                                 # the dep doesn't apply here (a recipe's own
                                 # cross-platform deps are its concern, e.g. a
@@ -1583,6 +1634,18 @@ def builds_submit_dag(
                     # requires_capabilities: [cuda] recipe with no cuda
                     # builder) — their jobs would only sit pending until the
                     # server's unschedulable reaper failed them.
+                    #
+                    # Only the recipe's OWN capabilities are weighed, not the
+                    # glibc floor the job also carries, so a recipe whose two
+                    # halves are individually servable but jointly are not
+                    # still reaches the server before anyone notices (that is
+                    # how torch-cp311-cuda got stranded: a cuda builder exists,
+                    # but it is the fleet's one 2.39 host).  Folding the floor
+                    # in here needs the unknown case to fail OPEN first — a
+                    # builder on an agent older than glibc capability reporting
+                    # advertises none, and reading that as "cannot serve" would
+                    # make submit-dag refuse every linux recipe until the whole
+                    # fleet had been upgraded.  Same reasoning as min_disk.
                     if _builder_check:
                         _uncapable = [
                             n
@@ -1637,7 +1700,7 @@ def builds_submit_dag(
                             "org_slug": org_slug,
                             "depends_on": [],
                         }
-                        _rc = _required_caps(name) + _platform_caps(plat)
+                        _rc = _required_caps(name) + _platform_caps(name, plat)
                         if _rc:
                             job["required_capabilities"] = sorted(set(_rc))
                         _d = _min_disk(name)
@@ -1723,7 +1786,7 @@ def builds_submit_dag(
                         # A noarch job is built on the reference target, so it
                         # inherits THAT platform's floor even though the bundle
                         # itself is platform-independent.
-                        _rc = _required_caps(name) + _platform_caps(_noarch_target[0])
+                        _rc = _required_caps(name) + _platform_caps(name, _noarch_target[0])
                         if _rc:
                             job["required_capabilities"] = sorted(set(_rc))
                         _d = _min_disk(name)
