@@ -43,10 +43,12 @@ from __future__ import annotations
 import os
 import shutil
 import socket
+import sys
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 # Per-job roots, named unambiguously.  A ``cvcpkg-job-*`` tree is always scratch
 # and is removed whole (its own prefix/out children live inside it).
@@ -252,25 +254,43 @@ def _candidates(work_dir: Path) -> list[Path]:
     return found
 
 
-def _rmtree(path: Path) -> None:
-    """``shutil.rmtree`` with a short retry, because Windows deletion is racy.
+#: Last per-entry errors from the most recent :func:`_rmtree` that left the
+#: tree in place, for diagnostics (the gc tests surface it on failure).
+_LAST_RMTREE_ERRORS: list[str] = []
 
-    Measured on the windows-latest runner (the forensics in
-    test_a_live_pid_stops_protecting_once_its_heartbeat_is_ancient): an
-    external scanner takes a handle on the freshly written tree, five
-    suppressed rmtree attempts over 1.5 s delete NOTHING (the full tree
-    survives, not a partial one), and an unsuppressed rmtree moments later
-    succeeds.  The lock is whole-tree and heals on its own within a few
-    seconds, so the cure is time: back off up to ~6 s total.  POSIX
-    succeeds on the first pass and never sleeps.
+
+def _rmtree(path: Path) -> None:
+    """``shutil.rmtree`` with retries, collecting errors instead of hiding them.
+
+    Windows needs both.  Measured on the windows-latest runner (forensics in
+    test_a_live_pid_stops_protecting_once_its_heartbeat_is_ancient): the sweep
+    correctly decides to delete, yet the FULL tree remains after ~6 s of
+    suppressed retries.  The shape matches NTFS delete-pending semantics: a
+    scanner holding share-delete handles lets each unlink "succeed" into a
+    tombstone that still lists in the directory, the parent rmdir then fails
+    DIR_NOT_EMPTY, and repeated attempts can retrigger scans and renew the
+    handles — so backoff alone cannot be relied on.  The collected errors
+    exist to confirm or refute exactly that on the next failure.  POSIX
+    succeeds on the first attempt and never sleeps.
     """
+    _LAST_RMTREE_ERRORS.clear()
+
+    def _note(func: Any, p: Any, exc: Any) -> None:
+        if isinstance(exc, tuple):  # onerror-style exc_info triple
+            exc = exc[1]
+        if len(_LAST_RMTREE_ERRORS) < 8:
+            _LAST_RMTREE_ERRORS.append(f"{getattr(func, '__name__', '?')}({p}): {exc!r}")
+
+    kwargs: dict[str, Any] = {"onexc": _note} if sys.version_info >= (3, 12) else {"onerror": _note}
     delay = 0.1
     for attempt in range(7):
         if attempt:
             time.sleep(delay)
             delay *= 2
-        shutil.rmtree(path, ignore_errors=True)
+        _LAST_RMTREE_ERRORS.clear()
+        shutil.rmtree(path, **kwargs)
         if not path.exists():
+            _LAST_RMTREE_ERRORS.clear()
             return
 
 

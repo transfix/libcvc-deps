@@ -200,6 +200,12 @@ def _run() -> None:
                 _thread = None
                 return
         for path, (label, started) in items:
+            with _lock:
+                if path not in _watched:
+                    # Unwatched while this iteration was in flight; its final
+                    # beat has already run and a periodic one after it would
+                    # contradict "unwatch stops the beats".
+                    continue
             if not beat_once(path, label=label, started=started):
                 with _lock:
                     _watched.pop(path, None)

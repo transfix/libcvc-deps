@@ -141,6 +141,10 @@ class TestWatcher:
         finally:
             unwatch(tree)
 
+        # Drain first: a periodic beat already past the membership re-check
+        # when unwatch() returned may still land within microseconds.  Settle
+        # AFTER that window, then require silence.
+        time.sleep(0.1)
         settled = hb.stat().st_mtime_ns
         time.sleep(0.3)
         assert hb.stat().st_mtime_ns == settled, "unwatch must stop the beats"
