@@ -230,9 +230,28 @@ class TestSweepWorkDir:
         # module), so a post-sweep _is_active on a partially deleted or
         # delete-pending tree can read "active" again -- observed on
         # windows-latest in round 8 of pr-443.
+        import cvcpkg.heartbeat as _hb_mod
         from cvcpkg.builder_gc import _LAST_RMTREE_ERRORS, _is_active
 
-        assert not _is_active(stranded, time.time() - 3600), "a pid outlives its credibility"
+        cutoff = time.time() - 3600
+        if _is_active(stranded, cutoff):  # pragma: no cover - CI forensics
+            # Fires on windows-latest only; dump every input to the ladder so
+            # the failing rung is named instead of guessed at.
+            def _mt(q):
+                try:
+                    return q.stat().st_mtime
+                except OSError as exc:  # noqa: BLE001
+                    return repr(exc)
+
+            hb_m = _mt(stranded / HEARTBEAT_NAME)
+            raise AssertionError(
+                "a pid outlives its credibility: "
+                f"now={time.time()} cutoff={cutoff} old={old} "
+                f"root={_mt(stranded)} hb={hb_m} "
+                f"build={_mt(stranded / 'build')} blob={_mt(stranded / 'build' / 'blob')} "
+                f"gate_pid_trust={isinstance(hb_m, float) and hb_m >= cutoff - _PID_TRUST_SECONDS} "
+                f"watched={list(_hb_mod._watched)}"
+            )
 
         res = sweep_work_dir(tmp_path, max_age_seconds=3600)
 
