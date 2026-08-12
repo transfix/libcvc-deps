@@ -255,15 +255,17 @@ def _candidates(work_dir: Path) -> list[Path]:
 def _rmtree(path: Path) -> None:
     """``shutil.rmtree`` with a short retry, because Windows deletion is racy.
 
-    On NTFS a file with any open handle (antivirus scanners take transient
-    ones) fails its unlink, ``ignore_errors`` swallows it, and the partial
-    tree survives the sweep -- observed as a flaky
-    ``test_a_live_pid_stops_protecting_once_its_heartbeat_is_ancient`` on the
-    windows-latest runner.  A couple of spaced retries is the standard cure;
-    POSIX succeeds on the first pass and never sleeps.
+    Measured on the windows-latest runner (the forensics in
+    test_a_live_pid_stops_protecting_once_its_heartbeat_is_ancient): an
+    external scanner takes a handle on the freshly written tree, five
+    suppressed rmtree attempts over 1.5 s delete NOTHING (the full tree
+    survives, not a partial one), and an unsuppressed rmtree moments later
+    succeeds.  The lock is whole-tree and heals on its own within a few
+    seconds, so the cure is time: back off up to ~6 s total.  POSIX
+    succeeds on the first pass and never sleeps.
     """
     delay = 0.1
-    for attempt in range(5):
+    for attempt in range(7):
         if attempt:
             time.sleep(delay)
             delay *= 2
