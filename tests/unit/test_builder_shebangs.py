@@ -80,14 +80,23 @@ def _polyglot(root, relpath, interp, mode=0o755):
     return path
 
 
-# The exact prefix shape that triggered this in the wild: cvcpkg embeds the
-# recipe name TWICE (job dir + prefix dir), so a long recipe name pushes the
-# interpreter past the shebang limit and pip switches to the polyglot form.
-# trove-classifiers-cp311 crossed it, black-cp311 did not -- which made the
-# breakage depend on nothing but the length of the recipe's name.
+# The exact prefix shape that triggered this in the wild.  pip switches to the
+# polyglot form once the interpreter path passes the kernel's 128-byte
+# BINPRM_BUF_SIZE, and that path is
+# <work root>/cvcpkg-job-<name>-<id>/cvcpkg-prefix-<name>-<id>/bin/pythonX.Y --
+# so the BUILDER contributes as much as the recipe name does.
 LONG_PREFIX = (
     "/tmp/cvcpkg-builder/cvcpkg-job-trove-classifiers-cp311-b07zsnjz"
     "/cvcpkg-prefix-trove-classifiers-cp311-2nqo44fa"
+)
+
+# prettyhatemachine's work root is 15 chars longer than the /tmp builders', which
+# is enough to flip a recipe across the limit on its own: torch-cp311 stays plain
+# at 101 bytes on a /tmp builder, but torch-cp311-cuda -- five characters longer,
+# and buildable ONLY on this host -- reaches 126 and goes polyglot.
+CUDA_HOST_PREFIX = (
+    "/var/lib/cvcpkg-builder/cvcpkg-org/cvcpkg-job-torch-cp311-cuda-jhb2rnq8"
+    "/cvcpkg-prefix-torch-cp311-cuda-mlp9p6a4"
 )
 
 
@@ -139,6 +148,19 @@ def test_rewritten_sh_polyglot_actually_runs(tmp_path):
         "PATH": f"{os.path.dirname(sys.executable)}{os.pathsep}{os.environ['PATH']}",
     }
     assert subprocess.run([str(script)], capture_output=True, env=env).returncode == 7
+
+
+def test_rewrites_polyglot_under_alternate_builder_work_root(tmp_path):
+    # The rewrite must key off "is this an ephemeral cvcpkg dir", not off /tmp:
+    # prettyhatemachine builds under /var/lib/cvcpkg-builder/cvcpkg-org/, and it
+    # is the only host that can build the -cuda columns, so a /tmp-only match
+    # would leave exactly the packages nothing else can rebuild broken.
+    script = _polyglot(tmp_path, "bin/torchrun", f"{CUDA_HOST_PREFIX}/bin/python3.11")
+    assert len(f"{CUDA_HOST_PREFIX}/bin/python3.11") > 120  # why pip went polyglot
+    _rewrite_shebangs(tmp_path)
+    text = script.read_bytes().decode()
+    assert text.splitlines()[1] == "'''exec' /usr/bin/env python3.11 \"$0\" \"$@\""
+    assert "/var/lib/" not in text and "cvcpkg-" not in text
 
 
 def test_genuine_sh_polyglot_untouched(tmp_path):

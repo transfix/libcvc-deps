@@ -1907,11 +1907,20 @@ _SHEBANG_DIRS = ("bin", "sbin", "libexec")
 #     ' '''
 #
 # The interpreter is on line TWO, so the line-one rewrite below never saw it and
-# passed the script through as a harmless ``#!/bin/sh``.  That made the breakage
-# depend on the RECIPE NAME's length: cvcpkg's job/prefix dirs embed the recipe
-# name twice, so short names (black-cp311) stayed under the limit and got the
-# plain form, while long ones (trove-classifiers-cp311, charset-normalizer-cp311,
-# hatch-fancy-pypi-readme-cp311) crossed it and shipped a dead absolute path.
+# passed the script through as a harmless ``#!/bin/sh``.
+#
+# Which form pip emits is decided by the TOTAL path length against the kernel's
+# 128-byte BINPRM_BUF_SIZE, and that path is
+# ``<work root>/cvcpkg-job-<name>-<id>/cvcpkg-prefix-<name>-<id>/bin/pythonX.Y``
+# -- so it depends on the BUILDER as much as on the recipe.  The fleet's work
+# roots differ by 15 characters (``/tmp/cvcpkg-builder/`` on star-*/rebota/lat
+# vs ``/var/lib/cvcpkg-builder/cvcpkg-org/`` on prettyhatemachine), a window wide
+# enough that one recipe emits the plain form on one host and the polyglot on
+# another: torch-cp311 lands at 101 bytes on a /tmp builder, while
+# torch-cp311-cuda -- five characters longer, and buildable ONLY on the CUDA
+# host -- lands at 126 and goes polyglot.  Two corollaries: this is not a
+# property of the recipe alone, and an audit over published artifacts
+# UNDER-counts, because most packages were last built on a /tmp builder.
 #
 # Both readings survive substituting the interpreter token: sh parses ``'''exec'``
 # as ``'' + 'exec'`` and execs the rest, while Python sees lines 2-3 as one
