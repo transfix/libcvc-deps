@@ -223,13 +223,18 @@ class TestSweepWorkDir:
         ):
             os.utime(target, (old, old))
 
-        res = sweep_work_dir(tmp_path, max_age_seconds=3600)
-
         # The behaviour under test is the TRUST WINDOW: an ancient heartbeat
         # must stop protecting the tree, i.e. the sweep must judge it stale.
+        # Asserted BEFORE the sweep runs: deletion itself advances the parent
+        # directory's mtime as entries disappear (the very premise of this
+        # module), so a post-sweep _is_active on a partially deleted or
+        # delete-pending tree can read "active" again -- observed on
+        # windows-latest in round 8 of pr-443.
         from cvcpkg.builder_gc import _LAST_RMTREE_ERRORS, _is_active
 
         assert not _is_active(stranded, time.time() - 3600), "a pid outlives its credibility"
+
+        res = sweep_work_dir(tmp_path, max_age_seconds=3600)
 
         if os.name == "nt" and stranded.exists():
             # NTFS can defeat same-pass deletion regardless of the decision.
