@@ -214,7 +214,17 @@ class TestSweepWorkDir:
 
         stranded = _job_dir(tmp_path, "cvcpkg-job-wrapped-eee")
         beat_once(stranded, label="wrapped")  # records THIS process, alive
-        old = time.time() - (_PID_TRUST_SECONDS + 3600)
+        # The extra 60s is load-bearing, not padding.  The gate is
+        # `hb_mtime >= cutoff - _PID_TRUST_SECONDS`, and `cutoff` comes from a
+        # *second* time.time() call below, so without slack this clears the
+        # boundary by exactly the drift between two adjacent clock reads.  On
+        # Linux that is ~100µs and it passes; on Windows time.time() is coarse
+        # (~15.6ms ticks before CPython 3.13), both reads land in the same tick,
+        # the margin is exactly 0.0, and `>=` judges the ancient heartbeat still
+        # trustworthy -- windows-latest only.  Deriving both from one hoisted
+        # `now` does NOT fix it: that makes the margin 0 by construction and
+        # fails everywhere.
+        old = time.time() - (_PID_TRUST_SECONDS + 3600) - 60
         for target in (
             stranded / "build" / "blob",
             stranded / "build",
@@ -230,28 +240,10 @@ class TestSweepWorkDir:
         # module), so a post-sweep _is_active on a partially deleted or
         # delete-pending tree can read "active" again -- observed on
         # windows-latest in round 8 of pr-443.
-        import cvcpkg.heartbeat as _hb_mod
         from cvcpkg.builder_gc import _LAST_RMTREE_ERRORS, _is_active
 
         cutoff = time.time() - 3600
-        if _is_active(stranded, cutoff):  # pragma: no cover - CI forensics
-            # Fires on windows-latest only; dump every input to the ladder so
-            # the failing rung is named instead of guessed at.
-            def _mt(q):
-                try:
-                    return q.stat().st_mtime
-                except OSError as exc:  # noqa: BLE001
-                    return repr(exc)
-
-            hb_m = _mt(stranded / HEARTBEAT_NAME)
-            raise AssertionError(
-                "a pid outlives its credibility: "
-                f"now={time.time()} cutoff={cutoff} old={old} "
-                f"root={_mt(stranded)} hb={hb_m} "
-                f"build={_mt(stranded / 'build')} blob={_mt(stranded / 'build' / 'blob')} "
-                f"gate_pid_trust={isinstance(hb_m, float) and hb_m >= cutoff - _PID_TRUST_SECONDS} "
-                f"watched={list(_hb_mod._watched)}"
-            )
+        assert not _is_active(stranded, cutoff), "a pid outlives its credibility"
 
         res = sweep_work_dir(tmp_path, max_age_seconds=3600)
 
