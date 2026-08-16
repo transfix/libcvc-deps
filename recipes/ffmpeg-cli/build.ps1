@@ -116,14 +116,24 @@ $crossFlag  = if ($env:CVC_DEPS_PREFIX -and (Test-Path $crossProbe)) {
 # zlib1.dll. libx264 is still absorbed statically (there is a real libx264.a)
 # and the GCC runtime stays in, so the single added runtime dependency is a
 # cvcpkg-built DLL sitting beside the exe.
-# -static-libgcc covers libgcc, but NOT libwinpthread, which x264 pulls in. A
-# plain -static-libgcc build imports libwinpthread-1.dll, and cvcpkg packages
-# no MinGW runtime, so the exe cannot start from a clean prefix. Bracketing the
-# pthread link with -Bstatic/-Bdynamic absorbs just that one library while
-# leaving zlib on the dynamic path, so the result is:
-#   static: libx264, libgcc, libwinpthread
-#   dynamic: zlib1.dll, from the prefix — a cvcpkg-built DLL beside the exe
-$gccRuntime = "-static-libgcc -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic"
+# -static-libgcc covers libgcc, but NOT libwinpthread, which x264 pulls in, so
+# the exe imports libwinpthread-1.dll. That used to be fatal — nothing packaged
+# the MinGW runtime, so ffmpeg.exe could not start from a clean prefix.
+#
+# The attempted fix here was to bracket just that library, `-Wl,-Bstatic
+# -lwinpthread -Wl,-Bdynamic`, absorbing pthreads while leaving zlib dynamic.
+# It does not work: --extra-ldexeflags are emitted BEFORE the object files and
+# libraries on the link line, so by the time ld resolves the real -lwinpthread
+# the -Bdynamic is long since back in effect. The import survives.
+#
+# mingw-w64-runtime removes the need. It packages the eight redistributable
+# GCC/threading DLLs from the SAME pinned WinLibs artifact as mingw-w64-gcc, so
+# the runtime always matches the compiler that produced the code, and it is
+# declared in this recipe's depends.runtime. Link plainly and let the package
+# supply the DLLs:
+#   static:  libx264, libgcc
+#   dynamic: zlib1.dll + libwinpthread-1.dll — all cvcpkg-built, beside the exe
+$gccRuntime = "-static-libgcc"
 $linkFlags = if ($env:CVC_LINK -eq 'shared') {
     "--enable-shared --disable-static --extra-ldexeflags='$gccRuntime'"
 } else {
