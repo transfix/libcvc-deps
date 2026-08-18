@@ -26,6 +26,48 @@ _TERMINAL_STATUSES = frozenset({"succeeded", "failed", "cancelled", "timed_out",
 # e.g. a heavy recipe (llvm) that cannot finish inside a CI window.
 WAIT_TIMEOUT_EXIT_CODE = 75
 
+# Non-terminal statuses that mean NO builder has the job yet.  A job sitting
+# here when the wait budget elapses was never claimed -- that is a scheduling
+# or capacity problem, not a slow build, and it must not be reported as
+# "still building".  Conflating the two made the pr-recipe-build-dev check
+# green while it had verified nothing: ca-bundle (a 190 KB download) sat
+# unclaimed for the full 25-minute window on both pr-447 and pr-457 and the
+# check passed each time.
+_UNCLAIMED_STATUSES = frozenset({"pending", "dispatched"})
+
+
+def _builder_can_serve(builder: dict, job: dict) -> bool:
+    """Mirror of the server scheduler's eligibility test, minus transients.
+
+    Matches ``_choose_builder`` in server/app.py on the durable axes —
+    namespace, required capabilities, platform/arch (including
+    ``cross_platforms`` and the noarch reference target for ``any``) — and
+    deliberately ignores the transient ones (capacity, free disk): the caller
+    wants "could anything EVER claim this job", not "could it claim it right
+    now".
+    """
+    served = builder.get("served_namespaces") or [builder.get("org_slug", "")]
+    if (job.get("org_slug") or "") not in served:
+        return False
+    caps = builder.get("capabilities") or {}
+    if any(not caps.get(c) for c in job.get("required_capabilities") or []):
+        return False
+    jp, ja = job.get("platform"), job.get("arch")
+    if jp == "any":
+        from cvcpkg.platform import noarch_build_target
+
+        jp, ja = noarch_build_target()
+    if builder.get("platform") == jp and builder.get("arch") == ja:
+        return True
+    for cp in caps.get("cross_platforms") or []:
+        if isinstance(cp, dict):
+            if cp.get("platform") == jp and cp.get("arch") == ja:
+                return True
+        elif cp == jp:  # legacy platform-only cross target
+            return True
+    return False
+
+
 # A DAG's jobs may not be queryable the instant a waiter starts, so an empty
 # result is only conclusive after this many consecutive polls.
 _EMPTY_POLL_GRACE = 24  # × 5s ≈ 2 min
@@ -760,6 +802,7 @@ def _wait_for_dags(
     failed_ids: list[int] = []
     skipped_ids: list[int] = []
     building: list[str] = []
+    unclaimed: list[tuple[str, dict]] = []
     with httpx.Client(timeout=30) as client:
         for jid in all_job_ids:
             resp = client.get(f"{base}/v1/builds/{jid}", headers=headers)
@@ -773,8 +816,16 @@ def _wait_for_dags(
                 skipped_ids.append(jid)
                 continue
             if status not in terminal:
-                # Still building -- only reachable when we stopped at the deadline.
-                building.append(f"#{jid} {info.get('recipe_name', '?')}")
+                # Only reachable when we stopped at the deadline.  Split by
+                # whether a builder ever picked the job up: "running" is a
+                # genuinely slow build and a legitimate soft pass, while
+                # pending/dispatched means nothing claimed it and the run
+                # verified nothing at all.
+                label = f"#{jid} {info.get('recipe_name', '?')} ({status})"
+                if status in _UNCLAIMED_STATUSES:
+                    unclaimed.append((label, info))
+                else:
+                    building.append(label)
                 continue
             failed_ids.append(jid)
 
@@ -792,6 +843,60 @@ def _wait_for_dags(
             err=True,
         )
         raise SystemExit(WAIT_TIMEOUT_EXIT_CODE)
+    if timed_out and unclaimed:
+        # Not a slow build: no builder ever took these.  Whether that is a
+        # hard failure depends on WHY.  Ask the builder registry and split:
+        #
+        #   * queued  — an ONLINE builder can serve the job but every such
+        #     builder is at capacity (current_jobs >= max_jobs).  The job is
+        #     legitimately waiting in line behind running work; that is the
+        #     same "submitted OK, will finish on the cluster" shape as a slow
+        #     build, so it soft-passes with the same exit code.
+        #   * dead    — either no online builder can serve the job at all
+        #     (every capable builder offline/deregistered), or a capable
+        #     builder is online WITH free capacity and still nothing claimed
+        #     the job for the whole window.  The latter is exactly the
+        #     ca-bundle pathology (pr-447/pr-457: three online builders, a
+        #     190 KB job pending for 25 minutes) — a scheduler or builder
+        #     that has gone silent must not produce a green check.
+        #
+        # If the registry itself cannot be read, every unclaimed job counts
+        # as dead: an unverifiable "nothing happened" must stay a failure.
+        builders: list[dict] | None
+        try:
+            with httpx.Client(timeout=30) as client:
+                resp = client.get(f"{base}/v1/builders", headers=headers)
+                builders = resp.json().get("builders", []) if resp.status_code < 400 else None
+        except Exception:
+            builders = None
+        queued: list[str] = []
+        dead: list[str] = []
+        for label, info in unclaimed:
+            capable = [
+                b
+                for b in builders or []
+                if b.get("status") == "online" and _builder_can_serve(b, info)
+            ]
+            if capable and all(
+                int(b.get("current_jobs") or 0) >= int(b.get("max_jobs") or 1) for b in capable
+            ):
+                queued.append(label)
+            else:
+                dead.append(label)
+        if dead:
+            raise click.ClickException(
+                f"{len(dead)} job(s) were never claimed by a builder within "
+                f"{wait_timeout:.0f}s: {', '.join(sorted(dead))}. "
+                "Nothing was verified — check that a registered builder can serve this "
+                "platform/arch and is online (`cvcpkg builds monitor`)."
+            )
+        click.echo(
+            f"\n{len(queued)} job(s) still queued after {wait_timeout:.0f}s behind "
+            f"online builder(s) at capacity (submitted OK, continuing on the "
+            f"cluster): {', '.join(sorted(queued))}"
+        )
+        if not building:
+            raise SystemExit(WAIT_TIMEOUT_EXIT_CODE)
     if timed_out and building:
         click.echo(
             f"\n{len(building)} job(s) still building after {wait_timeout:.0f}s "
@@ -1066,22 +1171,41 @@ def builds_submit_dag(
                     names.append(dep["name"])
         return names
 
-    def _has_platform_entry(name: str, plat: str) -> bool:
-        """Check if a recipe has a build matrix entry for the platform."""
+    def _matrix_platforms(name: str) -> list[str]:
         data = recipe_data.get(name, {})
-        matrix = data.get("build", {}).get("matrix", [])
-        return any(entry.get("platform") in (plat, "any") for entry in matrix)
+        return [entry.get("platform", "") for entry in data.get("build", {}).get("matrix", [])]
 
-    def _is_any(name: str) -> bool:
-        """True if *name* is platform-independent (every matrix entry is 'any').
+    def _has_explicit_platform_entry(name: str, plat: str) -> bool:
+        """True if *name* has a matrix entry naming *plat* itself.
 
-        Such a recipe ships one noarch bundle valid on every host, so it is
-        scheduled once (platform=any/arch=noarch) instead of fanned out per
-        concrete platform.
+        The concrete per-platform passes key off THIS rather than "can build
+        for plat at all":
+        a target that merely falls through to the `any` entry is covered by the
+        single noarch job, and scheduling it per platform as well is what
+        published one host-tagged bundle per platform for packages that should
+        have shipped a single noarch one.
         """
-        data = recipe_data.get(name, {})
-        matrix = data.get("build", {}).get("matrix", [])
-        return bool(matrix) and all(entry.get("platform") == "any" for entry in matrix)
+        return plat in _matrix_platforms(name)
+
+    def _has_any_entry(name: str) -> bool:
+        """True if *name* has an `any` entry, i.e. it publishes a noarch bundle.
+
+        Such a recipe is scheduled once (platform=any/arch=noarch) for every
+        target that entry serves, instead of being fanned out per platform.  It
+        may ALSO have explicit entries (a pure-Python column with a `windows`
+        script); those are scheduled separately by the per-platform passes.
+        """
+        return "any" in _matrix_platforms(name)
+
+    def _has_explicit_entry(name: str) -> bool:
+        """True if *name* has at least one entry naming a concrete platform."""
+        return any(p and p != "any" for p in _matrix_platforms(name))
+
+    def _serves_via_any(name: str, plat: str) -> bool:
+        """True if *name*'s build for *plat* comes from its `any` entry."""
+        from cvcpkg.platform import served_by_any_entry
+
+        return served_by_any_entry(_matrix_platforms(name), plat)
 
     # Linux bundles must run on the fleet's OLDEST glibc, not merely on the
     # machine that happened to build them: glibc is backward- but not
@@ -1091,8 +1215,27 @@ def builds_submit_dag(
     from cvcpkg.glibc import capability_name as _glibc_cap
     from cvcpkg.glibc import target_floor as _glibc_floor
 
-    def _platform_caps(plat: str) -> list[str]:
-        return [_glibc_cap(_glibc_floor())] if plat == "linux" else []
+    def _platform_caps(name: str, plat: str) -> list[str]:
+        """The floor capability a linux job needs, unless the payload is prebuilt.
+
+        The floor capability is a proxy for "whatever this builder COMPILES
+        will not demand symbols older than its own glibc".  A recipe that
+        compiles nothing — `prebuilt_payload`, e.g. a manylinux wheel repack —
+        has a floor fixed by whoever built the binary, so the proxy is a
+        category error there, and an expensive one: it composes with the
+        recipe's own `requires_capabilities`, and `cuda` + `glibc2.35` is
+        satisfied by no builder on this fleet (the one CUDA host runs 2.39),
+        which left torch-cp311-cuda permanently `unschedulable`.
+
+        Dropping it costs no safety: stage_bundle's floor gate still scans the
+        real staged tree against the same floor and raises, so the failure
+        mode is a loud build error, never a bundle that will not start.
+        """
+        if plat != "linux":
+            return []
+        if recipe_data.get(name, {}).get("prebuilt_payload"):
+            return []
+        return [_glibc_cap(_glibc_floor())]
 
     def _required_caps(name: str) -> list[str]:
         """A recipe's top-level requires_capabilities (e.g. ['cuda']).
@@ -1307,13 +1450,16 @@ def builds_submit_dag(
         seen.difference_update(seeds)
         return seen
 
-    # Partition the requested recipes: platform-independent ('any') recipes are
-    # scheduled once as a single noarch DAG (below); everything else fans out
-    # per concrete platform/arch.  Keeping the 'any' recipes out of the
-    # per-platform DAGs is what prevents the arch-pinned mispublish (one
-    # linux-x86_64 bundle, one macos-arm64 bundle, ...) of a noarch package.
-    any_names = [n for n in recipe_names if _is_any(n)]
-    concrete_names = [n for n in recipe_names if not _is_any(n)]
+    # Split the requested recipes by what each BUILD produces, not by what the
+    # recipe as a whole looks like.  A recipe with an `any` entry is scheduled
+    # once as noarch for every target that entry serves; a recipe with explicit
+    # platform entries also fans out over those platforms.  The two sets
+    # OVERLAP: a pure-Python column carrying `any` (build.sh) plus `windows`
+    # (build.ps1) belongs in both — one noarch bundle for the POSIX targets and
+    # one windows bundle — and that overlap is what keeps the `any` entry's
+    # targets from being mispublished as one arch-pinned bundle per platform.
+    any_names = [n for n in recipe_names if _has_any_entry(n)]
+    concrete_names = [n for n in recipe_names if _has_explicit_entry(n)]
 
     dag_ids: list[str] = []
 
@@ -1361,9 +1507,19 @@ def builds_submit_dag(
                     # wasm/wasi/cosmo only support static linking.
                     if plat in _static_only_platforms and lnk != "static":
                         continue
-                    # Filter recipes: skip those with no matrix entry
-                    eligible = [n for n in concrete_names if _has_platform_entry(n, plat)]
-                    skipped = set(concrete_names) - set(eligible)
+                    # Filter recipes: only those with an entry naming THIS
+                    # platform.  A recipe that reaches `plat` through its `any`
+                    # entry is built once in the noarch pass instead.
+                    eligible = [n for n in concrete_names if _has_explicit_platform_entry(n, plat)]
+                    # Report only what this platform genuinely loses.  A recipe
+                    # covered by the noarch pass is not "skipped" — it is built
+                    # once, for every platform its `any` entry serves — and
+                    # listing it here reads as a gap in the run when it is not.
+                    skipped = {
+                        n
+                        for n in set(concrete_names) - set(eligible)
+                        if not _serves_via_any(n, plat)
+                    }
                     if skipped:
                         click.echo(
                             f"  Skipping {len(skipped)} recipe(s) "
@@ -1428,7 +1584,7 @@ def builds_submit_dag(
                                 ):
                                     unbuildable.append(dep)
                                 continue
-                            if _is_any(dep):
+                            if _serves_via_any(dep, plat):
                                 # A noarch dep is scheduled in the noarch pass
                                 # below, and now lands in the SAME submitted DAG
                                 # as this job — so pull it in and let the edge
@@ -1440,7 +1596,7 @@ def builds_submit_dag(
                                     any_names.append(dep)
                                     cross_noarch.append(dep)
                                 continue
-                            if not _has_platform_entry(dep, plat):
+                            if not _has_explicit_platform_entry(dep, plat):
                                 # Has a recipe but no build for this platform:
                                 # the dep doesn't apply here (a recipe's own
                                 # cross-platform deps are its concern, e.g. a
@@ -1478,6 +1634,18 @@ def builds_submit_dag(
                     # requires_capabilities: [cuda] recipe with no cuda
                     # builder) — their jobs would only sit pending until the
                     # server's unschedulable reaper failed them.
+                    #
+                    # Only the recipe's OWN capabilities are weighed, not the
+                    # glibc floor the job also carries, so a recipe whose two
+                    # halves are individually servable but jointly are not
+                    # still reaches the server before anyone notices (that is
+                    # how torch-cp311-cuda got stranded: a cuda builder exists,
+                    # but it is the fleet's one 2.39 host).  Folding the floor
+                    # in here needs the unknown case to fail OPEN first — a
+                    # builder on an agent older than glibc capability reporting
+                    # advertises none, and reading that as "cannot serve" would
+                    # make submit-dag refuse every linux recipe until the whole
+                    # fleet had been upgraded.  Same reasoning as min_disk.
                     if _builder_check:
                         _uncapable = [
                             n
@@ -1532,7 +1700,7 @@ def builds_submit_dag(
                             "org_slug": org_slug,
                             "depends_on": [],
                         }
-                        _rc = _required_caps(name) + _platform_caps(plat)
+                        _rc = _required_caps(name) + _platform_caps(name, plat)
                         if _rc:
                             job["required_capabilities"] = sorted(set(_rc))
                         _d = _min_disk(name)
@@ -1618,7 +1786,7 @@ def builds_submit_dag(
                         # A noarch job is built on the reference target, so it
                         # inherits THAT platform's floor even though the bundle
                         # itself is platform-independent.
-                        _rc = _required_caps(name) + _platform_caps(_noarch_target[0])
+                        _rc = _required_caps(name) + _platform_caps(name, _noarch_target[0])
                         if _rc:
                             job["required_capabilities"] = sorted(set(_rc))
                         _d = _min_disk(name)

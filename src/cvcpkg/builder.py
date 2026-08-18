@@ -20,7 +20,7 @@ import sys
 import tarfile
 import tempfile
 import zipfile
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,7 +29,8 @@ from typing import Any
 import yaml
 
 from cvcpkg.errors import CvcpkgError
-from cvcpkg.platform import detect_arch, detect_platform
+from cvcpkg.heartbeat import unwatch, watch, watched
+from cvcpkg.platform import detect_arch, detect_platform, lib_path_var
 
 # ── Errors ──────────────────────────────────────────────────────
 
@@ -865,8 +866,12 @@ def _build_env(ctx: BuildContext, matrix: MatrixEntry) -> dict[str, str]:
         existing = env.get("DYLD_LIBRARY_PATH", "")
         env["DYLD_LIBRARY_PATH"] = ":".join(lib_dirs + ([existing] if existing else []))
     elif ctx.platform != "wasm":
-        existing = env.get("LD_LIBRARY_PATH", "")
-        env["LD_LIBRARY_PATH"] = ":".join(lib_dirs + ([existing] if existing else []))
+        # Not always LD_LIBRARY_PATH: Haiku's runtime_loader reads LIBRARY_PATH
+        # and ignores LD_LIBRARY_PATH outright, so the wrong name here would
+        # leave the prefix's shared libs invisible to every build step.
+        lib_var = lib_path_var(ctx.platform)
+        existing = env.get(lib_var, "")
+        env[lib_var] = ":".join(lib_dirs + ([existing] if existing else []))
 
     # Merge matrix-entry env overrides
     env.update(matrix.env)
@@ -905,7 +910,10 @@ def _find_patchelf(*prefixes: Path | None) -> str | None:
 # rewrite would be silently ignored — relocatable OpenBSD bundles need a
 # different mechanism if/when it becomes an active build target. macOS/Windows
 # are handled separately (install_name / PATH-relative DLLs).
-_ELF_RPATH_PLATFORMS = frozenset({"linux", "freebsd", "netbsd"})
+# Haiku qualifies too: its images are plain ELF, its runtime_loader honours
+# DT_RPATH/DT_RUNPATH and expands $ORIGIN, and HaikuPorts ships the same
+# patchelf 0.18.0 this rewrite drives.
+_ELF_RPATH_PLATFORMS = frozenset({"linux", "freebsd", "netbsd", "haiku"})
 
 
 def _patch_elf_rpath(install_dir: Path, patchelf: str | None = None) -> None:
@@ -1014,6 +1022,29 @@ def _patch_macos_install_names(install_dir: Path) -> None:
                 )
 
 
+def _make_relocatable(ctx: BuildContext) -> None:
+    """Rewrite the installed tree so the shared bundle is relocatable.
+
+    Consumers must load the libraries without LD_LIBRARY_PATH/DYLD_* —
+    ``$ORIGIN`` RPATH on ELF (Linux + the ``$ORIGIN``-honouring BSDs + Haiku),
+    ``@rpath`` install names on macOS.  (Windows resolves DLLs from the prefix
+    bin dir on PATH, so it needs no rewrite.)  On ELF, prefer cvcpkg's own
+    patchelf (bootstrapped into the build prefix as a host tool) over a system
+    install, so packaging is self-hosting — see _find_patchelf and
+    _bootstrap_host_tools.
+
+    Split out of :func:`run_build` because it has to run for DELEGATED builds
+    too, and those return early.
+    """
+    if ctx.link != "shared":
+        return
+    if ctx.platform == "macos":
+        _patch_macos_install_names(ctx.install_dir)
+    elif ctx.platform in _ELF_RPATH_PLATFORMS:
+        patchelf = _find_patchelf(ctx.build_prefix, ctx.prefix)
+        _patch_elf_rpath(ctx.install_dir, patchelf)
+
+
 def run_build(
     ctx: BuildContext,
     log_callback: Callable[[str], None] | None = None,
@@ -1038,6 +1069,35 @@ def run_build(
 
     if winhost.should_delegate(ctx.platform, ctx.host_platform):
         winhost.run_winhost_build(ctx, matrix, script, log_callback=log_callback)
+        return
+
+    # Haiku-target builds are delegated over SSH to a Haiku host — cvcpkg
+    # cannot run natively on Haiku (HaikuPorts has no pip and only
+    # cryptography 3.4.8 against our >=41 floor), so the Haiku box is a
+    # build target, never a builder.  See cvcpkg.haikuhost.  Both hooks sit
+    # ahead of everything below because the local path would otherwise hand
+    # the recipe's Haiku build.sh to the LOCAL toolchain and "succeed" —
+    # producing Linux binaries in a haiku/x86_64 package.
+    from cvcpkg import haikuhost
+
+    if haikuhost.should_delegate(ctx.platform, ctx.host_platform):
+        # run_haiku_build refuses (loudly) when no Haiku host is configured; it
+        # never falls back to the local toolchain.
+        haikuhost.run_haiku_build(ctx, matrix, script, log_callback=log_callback)
+        # The delegated build ends with the install tree copied BACK here, and
+        # a non-CMake recipe (no -DCMAKE_INSTALL_RPATH=$ORIGIN) leaves absolute
+        # build-tree RPATHs in it, so the bundle is not relocatable until this
+        # pass runs.  It runs on the Linux side, over the synced-back tree,
+        # because patchelf edits ELF as data rather than executing it and Haiku
+        # images are plain ELF64 — so the rewrite is identical wherever it is
+        # performed, while staying in ONE place (the same _find_patchelf that
+        # every other ELF platform uses) and requiring nothing of the Haiku box.
+        # Doing it remotely would instead need patchelf installed there, an
+        # extra round trip, and a second copy of this policy.
+        # [unverified] patchelf's handling of Haiku-produced ELF has not been
+        # exercised against a real Haiku host; _patch_elf_rpath is best-effort
+        # (it ignores patchelf failures), so the worst case is the status quo.
+        _make_relocatable(ctx)
         return
 
     env = _build_env(ctx, matrix)
@@ -1103,18 +1163,8 @@ def run_build(
         raise BuildError(f"Build script for {ctx.recipe.name} exited with code {returncode}")
 
     # Make shared bundles relocatable: rewrite absolute build-tree paths so
-    # consumers load the libraries without LD_LIBRARY_PATH/DYLD_* — $ORIGIN
-    # RPATH on ELF (Linux + the $ORIGIN-honouring BSDs), @rpath install names on
-    # macOS. (Windows resolves DLLs from the prefix bin dir on PATH, so it needs
-    # no rewrite here.)  On ELF, prefer cvcpkg's own patchelf (bootstrapped into
-    # the build prefix as a host tool) over a system install, so packaging is
-    # self-hosting — see _find_patchelf and _bootstrap_host_tools.
-    if ctx.link == "shared":
-        if ctx.platform == "macos":
-            _patch_macos_install_names(ctx.install_dir)
-        elif ctx.platform in _ELF_RPATH_PLATFORMS:
-            patchelf = _find_patchelf(ctx.build_prefix, ctx.prefix)
-            _patch_elf_rpath(ctx.install_dir, patchelf)
+    # consumers load the libraries without LD_LIBRARY_PATH/DYLD_*.
+    _make_relocatable(ctx)
 
 
 # ── Test execution ──────────────────────────────────────────────
@@ -1180,6 +1230,17 @@ def run_test(
     if not test_path.is_file():
         raise BuildError(f"Test script not found: {test_path}")
 
+    # SSH-delegated Haiku builds: the install tree that came back holds Haiku
+    # binaries this Linux-side process cannot execute, so running the test
+    # script HERE would test nothing (or, worse, test the builder's own Linux
+    # tools and pass).  The Haiku host is still reachable, so the test runs
+    # where the artifact runs — and refuses loudly if it cannot.
+    from cvcpkg import haikuhost as _haikuhost
+
+    if _haikuhost.should_delegate(ctx.platform, ctx.host_platform):
+        _haikuhost.run_haiku_test(ctx, test_path, log_callback=log_callback)
+        return
+
     env = os.environ.copy()
     env["CVC_PREFIX"] = ctx.install_dir.as_posix()
     env["CVC_INSTALL_DIR"] = ctx.install_dir.as_posix()
@@ -1221,8 +1282,10 @@ def run_test(
         existing = env.get("DYLD_LIBRARY_PATH", "")
         env["DYLD_LIBRARY_PATH"] = ":".join(lib_dirs + ([existing] if existing else []))
     else:
-        existing = env.get("LD_LIBRARY_PATH", "")
-        env["LD_LIBRARY_PATH"] = ":".join(lib_dirs + ([existing] if existing else []))
+        # Haiku reads LIBRARY_PATH, not LD_LIBRARY_PATH — see lib_path_var.
+        lib_var = lib_path_var(ctx.platform)
+        existing = env.get(lib_var, "")
+        env[lib_var] = ":".join(lib_dirs + ([existing] if existing else []))
 
     bash = _find_bash()
     header = f"cvcpkg: running test for {ctx.recipe.name}"
@@ -1503,11 +1566,25 @@ def stage_bundle(
     manifest: dict[str, Any],
     staging_dir: Path,
     recipe_dir: Path | None = None,
+    temp_prefixes: Sequence[Path | str] = (),
 ) -> None:
-    """Copy the installed tree, manifest, and recipe into a staging directory."""
+    """Copy the installed tree, manifest, and recipe into a staging directory.
+
+    *temp_prefixes* names the build-time prefixes (deps / build-tool /
+    install dirs) that will not exist wherever the bundle is unpacked;
+    console-script shebangs pointing into them are rewritten to relocatable
+    form — ``/usr/bin/env`` for POSIX text scripts (:func:`_rewrite_shebangs`),
+    ``<launcher_dir>`` for the shebang embedded in Windows Scripts/*.exe
+    launchers (:func:`_rewrite_exe_launchers`).  The rewrites run on the
+    STAGED copy only: ``pack --from-prefix`` packages a tree the caller
+    owns, which must come out of packing byte-identical.
+    """
     # Copy entire install tree (preserve symlinks for toolchains like cosmocc)
     if install_dir.is_dir():
         shutil.copytree(install_dir, staging_dir, symlinks=True, dirs_exist_ok=True)
+
+    _rewrite_shebangs(staging_dir, temp_prefixes)
+    _rewrite_exe_launchers(staging_dir, temp_prefixes)
 
     # Write manifest
     meta_dir = staging_dir / "share" / "libcvc-deps"
@@ -1642,11 +1719,11 @@ def _incremental_work_dir(
     return base / f"{name}-{platform}-{config}-{link}"
 
 
-def _write_text_preserving_mode(path: Path, text: str) -> None:
-    """Write *text* to *path* even when the file is read-only.
+def _write_bytes_preserving_mode(path: Path, data: bytes) -> None:
+    """Write *data* to *path* even when the file is read-only.
 
     Dependency payloads legitimately ship read-only files -- perl installs
-    ``lib/<ver>/<arch>/Config.pm`` mode 444 -- and a bare ``write_text``
+    ``lib/<ver>/<arch>/Config.pm`` mode 444 -- and a bare ``write_bytes``
     raises EACCES there.  Because prefix rewriting runs over a whole
     installed dependency tree, one such file aborted the entire dep install
     and took the build with it.
@@ -1655,7 +1732,7 @@ def _write_text_preserving_mode(path: Path, text: str) -> None:
     never silently leaves a file more writable than its package intended.
     """
     try:
-        path.write_text(text, encoding="utf-8")
+        path.write_bytes(data)
         return
     except PermissionError:
         pass
@@ -1663,7 +1740,7 @@ def _write_text_preserving_mode(path: Path, text: str) -> None:
     original = path.stat().st_mode
     try:
         path.chmod(original | stat.S_IWUSR)
-        path.write_text(text, encoding="utf-8")
+        path.write_bytes(data)
     finally:
         try:
             path.chmod(original)
@@ -1672,6 +1749,11 @@ def _write_text_preserving_mode(path: Path, text: str) -> None:
             # successful write, and must not turn one unwritable file into a
             # failed dependency install.
             pass
+
+
+def _write_text_preserving_mode(path: Path, text: str) -> None:
+    """UTF-8 text form of :func:`_write_bytes_preserving_mode`."""
+    _write_bytes_preserving_mode(path, text.encode("utf-8"))
 
 
 def _merge_tree(src: Path, dst: Path) -> None:
@@ -1802,6 +1884,361 @@ def _rewrite_script_prefixes(target_dir: Path) -> None:
             _write_text_preserving_mode(path, new_text)
 
 
+# A path component created by any of cvcpkg's mkdtemp calls: builder jobs
+# (cvcpkg-job-<recipe>-<id>), their prefixes (cvcpkg-prefix-<recipe>-<id>),
+# local pack work dirs (cvcpkg-<recipe>-<id>), and the builder work root
+# itself (/tmp/cvcpkg-builder).  Unlike _TEMP_PREFIX_RE this deliberately
+# does NOT require a trailing /install: a pip shebang bakes the *deps
+# prefix* (.../cvcpkg-job-x-y/bin/python3.11), which that regex misses.
+_TEMP_SHEBANG_RE = re.compile(r"/cvcpkg-[^/]+/")
+
+# Script dirs scanned for shebangs.  POSIX layouts only: a Windows console
+# script is a Scripts/*.exe launcher whose interpreter path is embedded
+# INSIDE the binary (pip/distlib append shebang + zip to a stub .exe);
+# those get their own binary-aware pass, :func:`_rewrite_exe_launchers`.
+# The ``#!`` sniff below skips them regardless (a PE starts ``MZ``).
+_SHEBANG_DIRS = ("bin", "sbin", "libexec")
+
+# pip's /bin/sh POLYGLOT wrapper, emitted instead of a plain ``#!`` whenever the
+# interpreter path is too long for the kernel's shebang limit (~128 bytes on
+# Linux) or contains a space::
+#
+#     #!/bin/sh
+#     '''exec' /tmp/cvcpkg-builder/cvcpkg-job-<recipe>-<id>/.../bin/python3.11 "$0" "$@"
+#     ' '''
+#
+# The interpreter is on line TWO, so the line-one rewrite below never saw it and
+# passed the script through as a harmless ``#!/bin/sh``.
+#
+# Which form pip emits is decided by the TOTAL path length against the kernel's
+# 128-byte BINPRM_BUF_SIZE, and that path is
+# ``<work root>/cvcpkg-job-<name>-<id>/cvcpkg-prefix-<name>-<id>/bin/pythonX.Y``
+# -- so it depends on the BUILDER as much as on the recipe.  The fleet's work
+# roots differ by 15 characters (``/tmp/cvcpkg-builder/`` on star-*/rebota/lat
+# vs ``/var/lib/cvcpkg-builder/cvcpkg-org/`` on prettyhatemachine), a window wide
+# enough that one recipe emits the plain form on one host and the polyglot on
+# another: torch-cp311 lands at 101 bytes on a /tmp builder, while
+# torch-cp311-cuda -- five characters longer, and buildable ONLY on the CUDA
+# host -- lands at 126 and goes polyglot.  Two corollaries: this is not a
+# property of the recipe alone, and an audit over published artifacts
+# UNDER-counts, because most packages were last built on a /tmp builder.
+#
+# Both readings survive substituting the interpreter token: sh parses ``'''exec'``
+# as ``'' + 'exec'`` and execs the rest, while Python sees lines 2-3 as one
+# triple-quoted string expression.
+_SH_POLYGLOT_RE = re.compile(r"^('''exec' +)(\S+)( .*)$")
+
+
+def _rewrite_sh_polyglot(
+    path: Path,
+    data: bytes,
+    head_end: int,
+    is_temp: Callable[[str], bool],
+) -> bool:
+    """Rewrite the interpreter inside pip's ``/bin/sh`` polyglot wrapper.
+
+    *data* is the whole script, *head_end* the index of the first newline (end
+    of the ``#!`` line).  Returns True when the file was rewritten.
+
+    Only the interpreter TOKEN on line two is replaced, with the same
+    ``/usr/bin/env <basename>`` form the plain-shebang path uses, so the sh
+    reading (``exec /usr/bin/env python3.11 "$0" "$@"``) and the Python reading
+    (lines 2-3 as one triple-quoted string) both keep working.
+    """
+    if head_end >= len(data):
+        return False
+    tail = data[head_end + 1 :]
+    line2_end = tail.find(b"\n")
+    if line2_end == -1:
+        return False
+    try:
+        line2 = tail[:line2_end].decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    m = _SH_POLYGLOT_RE.match(line2)
+    if not m or not is_temp(m.group(2)):
+        return False
+    new_line2 = f"{m.group(1)}/usr/bin/env {m.group(2).rsplit('/', 1)[-1]}{m.group(3)}"
+    _write_bytes_preserving_mode(
+        path,
+        data[: head_end + 1] + new_line2.encode() + tail[line2_end:],
+    )
+    return True
+
+
+def _rewrite_shebangs(root: Path, temp_prefixes: Sequence[Path | str] = ()) -> None:
+    """Rewrite build-prefix shebangs under *root*'s script dirs to env form.
+
+    pip writes every console script (``bin/cython``, ``bin/pybind11-config``,
+    ...) with a shebang naming the exact interpreter that ran the install —
+    inside cvcpkg that is the job's ephemeral deps prefix::
+
+        #!/tmp/cvcpkg-builder/cvcpkg-job-pybind11-cp311-abc123/bin/python3.11
+
+    a path that exists on no consumer machine, so the staged script cannot
+    execute from an installed prefix at all.  Recipes used to shim around it
+    case-by-case (numpy fabricates a ``cython`` wrapper, contourpy sidesteps
+    the dead ``pybind11-config`` via ``python -m pybind11 --pkgconfigdir``);
+    rewriting here, on the staged tree, fixes every bundle in one place.
+
+    The rewrite preserves the interpreter's basename and anchors it at env —
+    ``#!/usr/bin/env python3.11`` — the same form the meson recipe has always
+    used for its own wrapper.  The versioned name is shipped by the matching
+    interpreter recipe, and the prefix ``bin/`` is on PATH both under an
+    activated consumer prefix and inside a builder job (_build_env), so the
+    script resolves its own column's interpreter in either context.
+
+    A shebang is rewritten only when its interpreter clearly cannot survive
+    packaging: it lives under one of *temp_prefixes* (the build's deps /
+    build-tool / install prefixes) or under any ``cvcpkg-*`` directory
+    component (every dir shape cvcpkg mkdtemps).  System interpreters
+    (``#!/bin/sh``, ``#!/usr/bin/perl``) and already-relocatable env forms
+    pass through untouched -- EXCEPT a ``#!/bin/sh`` that turns out to be
+    pip's polyglot wrapper, whose real interpreter hides on line two
+    (:func:`_rewrite_sh_polyglot`); that one is a build-prefix path like any
+    other and is rewritten in place.  A matching shebang that carries interpreter
+    *arguments* is left alone with a warning: Linux hands everything after
+    the interpreter to it as ONE argument, so ``/usr/bin/env NAME ARG``
+    would trade a broken path for a broken invocation.
+    """
+    prefixes = tuple(str(p).rstrip("/") for p in temp_prefixes if p)
+
+    def _is_temp(interp: str) -> bool:
+        if any(interp.startswith(p + "/") for p in prefixes):
+            return True
+        return _TEMP_SHEBANG_RE.search(interp) is not None
+
+    count = 0
+    for sub in _SHEBANG_DIRS:
+        subdir = root / sub
+        if not subdir.is_dir():
+            continue
+        for path in sorted(subdir.rglob("*")):
+            if path.is_symlink() or not path.is_file():
+                continue
+            try:
+                if path.stat().st_size > _MAX_REWRITE_BYTES:
+                    continue
+                data = path.read_bytes()
+            except OSError:
+                continue
+            if not data.startswith(b"#!"):
+                continue
+            newline_at = data.find(b"\n")
+            head_end = newline_at if newline_at != -1 else len(data)
+            try:
+                line = data[2:head_end].decode("utf-8").strip()
+            except UnicodeDecodeError:
+                continue
+            fields = line.split(None, 1)
+            if not fields:
+                continue
+            interp = fields[0]
+            if not _is_temp(interp):
+                # Not a build-prefix interpreter on line one -- but pip may have
+                # hidden one on line two behind a /bin/sh polyglot (see
+                # _SH_POLYGLOT_RE).  Rewriting the token in place keeps both the
+                # sh and the Python reading intact.
+                rewritten = _rewrite_sh_polyglot(path, data, head_end, _is_temp)
+                if rewritten:
+                    count += 1
+                continue
+            if len(fields) > 1:
+                print(
+                    f"cvcpkg: WARNING: {path.relative_to(root)}: build-prefix shebang"
+                    f" carries interpreter arguments, left unrewritten: #!{line}"
+                )
+                continue
+            new_head = f"#!/usr/bin/env {interp.rsplit('/', 1)[-1]}".encode()
+            rest = data[head_end:] if newline_at != -1 else b"\n"
+            _write_bytes_preserving_mode(path, new_head + rest)
+            count += 1
+    if count:
+        print(f"cvcpkg: rewrote {count} build-prefix shebang(s) to /usr/bin/env form")
+
+
+# Script dirs scanned for Windows launcher .exes, and how far back from the
+# appended archive the shebang line is searched for.  distlib reads the line
+# into a MAX_PATH buffer, so a rewritten line must stay comfortably below
+# 260 bytes -- ours is ~30.
+_LAUNCHER_DIRS = ("Scripts", "bin")
+_LAUNCHER_SHEBANG_WINDOW = 512
+_LAUNCHER_MAX_SHEBANG = 250
+
+
+def _win_norm(path_str: str) -> str:
+    """Normalize a Windows-ish path for comparison: forward slashes, casefolded."""
+    return path_str.replace("\\", "/").rstrip("/").casefold()
+
+
+def _parse_launcher_shebang(seg: bytes) -> tuple[str, str] | None:
+    """Split a launcher shebang segment into (interpreter, args).
+
+    *seg* is the raw bytes between the stub PE image and the appended
+    archive: ``#!<interpreter>[ args]\\r?\\n``.  The interpreter may be
+    double-quoted (pip quotes paths containing spaces).  Returns None when
+    the segment is not decodable as the UTF-8 line the stub itself expects.
+    """
+    if not seg.startswith(b"#!") or not seg.endswith(b"\n"):
+        return None
+    try:
+        body = seg[2:].rstrip(b"\r\n").decode("utf-8").strip()
+    except UnicodeDecodeError:
+        return None
+    if body.startswith('"'):
+        closing = body.find('"', 1)
+        if closing == -1:
+            return None
+        return body[1:closing], body[closing + 1 :].strip()
+    # Unquoted: the stub delimits the interpreter at the last ``.exe``, not
+    # at whitespace, so mirror that rather than splitting on spaces.
+    lowered = body.casefold()
+    end = lowered.rfind(".exe")
+    while end != -1:
+        after = body[end + 4 : end + 5]
+        if after in ("", " ", "\t"):
+            return body[: end + 4], body[end + 4 :].strip()
+        end = lowered.rfind(".exe", 0, end)
+    # No .exe anywhere: /usr/bin/env form, or something we don't understand.
+    fields = body.split(None, 1)
+    if not fields:
+        return None
+    return fields[0], fields[1] if len(fields) > 1 else ""
+
+
+def _rewrite_exe_launchers(root: Path, temp_prefixes: Sequence[Path | str] = ()) -> None:
+    """Rewrite build-prefix interpreter paths inside staged Scripts/*.exe.
+
+    The Windows sibling of :func:`_rewrite_shebangs`.  pip builds each
+    console script as a launcher .exe of three concatenated segments
+    (distlib's ``ScriptMaker._write_script``)::
+
+        <stub PE image> #!C:\\...\\cvcpkg-job-x-y\\python\\python.exe\\r\\n <zip of __main__.py>
+
+    The embedded path names the interpreter that ran the install -- the
+    job's ephemeral build prefix -- so on any consumer machine the launcher
+    exits without running anything, same disease as the POSIX shebangs but
+    with the path INSIDE the binary.
+
+    The rewrite is a pure splice.  The stub locates the archive FROM THE END
+    of the file (end-of-central-directory scan; distlib writes the zip with
+    offsets relative to its own start) and then takes the line immediately
+    preceding it as the shebang, so the segment between PE image and archive
+    may change length freely as long as it stays newline-terminated and
+    adjacent.  Python's zipimport recomputes the same way on the child side.
+
+    The replacement anchors at the stub's own location::
+
+        #!<launcher_dir>\\..\\python.exe
+
+    ``<launcher_dir>\\`` is a literal prefix the stub resolves against its
+    own directory (distlib's SUPPORT_RELATIVE_PATH, in every launcher since
+    0.3.0; verified present in the stubs pip 25.0.1 and 26.2.1 embed, and
+    exercised end-to-end under wine).  From ``<prefix>\\Scripts`` that
+    reaches the interpreter at the merged prefix root, where the Windows
+    python recipes stage python.exe (``PC\\layout``) -- mirroring the POSIX
+    pass's reliance on the sibling ``bin/`` interpreter, but with no PATH
+    contract at all: the stub's alternative ``/usr/bin/env NAME`` form
+    hard-errors when NAME is not on PATH, and nothing guarantees a consumer
+    prefix ROOT (not ``Scripts``) is.  The interpreter basename is
+    preserved (python.exe vs pythonw.exe, versioned names).
+
+    Only launchers whose interpreter clearly cannot survive packaging are
+    touched, by the same rules as the POSIX pass but compared with Windows
+    semantics (either slash, case-insensitive).  Already-relocatable forms
+    (``<launcher_dir>``, ``/usr/bin/env``) pass through, which also makes
+    the rewrite idempotent.  A matching launcher carrying interpreter
+    arguments is left alone with a warning, mirroring the POSIX pass.
+    """
+    import io
+
+    prefixes = tuple(_win_norm(str(p)) for p in temp_prefixes if p)
+
+    def _is_temp(interp: str) -> bool:
+        n = _win_norm(interp)
+        if any(n.startswith(p + "/") for p in prefixes):
+            return True
+        return _TEMP_SHEBANG_RE.search(n) is not None
+
+    count = 0
+    for sub in _LAUNCHER_DIRS:
+        subdir = root / sub
+        if not subdir.is_dir():
+            continue
+        for path in sorted(subdir.rglob("*.exe")):
+            if path.is_symlink() or not path.is_file():
+                continue
+            try:
+                if path.stat().st_size > _MAX_REWRITE_BYTES:
+                    continue
+                data = path.read_bytes()
+            except OSError:
+                continue
+            if not data.startswith(b"MZ"):
+                continue
+            try:
+                zf = zipfile.ZipFile(io.BytesIO(data))
+                names = zf.namelist()
+                # min() over header offsets, not the EOCD's central-directory
+                # offset: zipfile has already folded the prepended-data delta
+                # into header_offset, so this is the archive start in file
+                # coordinates regardless of how the writer counted offsets.
+                arc_start = min(zi.header_offset for zi in zf.infolist())
+            except Exception:
+                continue  # no appended archive: a real tool .exe, not a launcher
+            if "__main__.py" not in names or not data.startswith(b"PK\x03\x04", arc_start):
+                continue
+            window_at = max(0, arc_start - _LAUNCHER_SHEBANG_WINDOW)
+            sheb_rel = data.rfind(b"#!", window_at, arc_start)
+            if sheb_rel == -1:
+                continue
+            seg = data[sheb_rel:arc_start]
+            parsed = _parse_launcher_shebang(seg)
+            if parsed is None:
+                continue
+            interp, args = parsed
+            if interp.startswith("<launcher_dir>") or interp == "/usr/bin/env":
+                continue
+            if not _is_temp(interp):
+                continue
+            if args:
+                print(
+                    f"cvcpkg: WARNING: {path.relative_to(root)}: build-prefix launcher"
+                    f" carries interpreter arguments, left unrewritten: #!{interp} {args}"
+                )
+                continue
+            basename = interp.replace("\\", "/").rsplit("/", 1)[-1]
+            if not basename:
+                continue
+            # Anchor at the launcher's own directory and climb to the staged
+            # root, where the interpreter lives in the merged install prefix.
+            depth = len(path.parent.relative_to(root).parts)
+            new_interp = "<launcher_dir>\\" + "..\\" * depth + basename
+            nl = b"\r\n" if seg.endswith(b"\r\n") else b"\n"
+            new_seg = b"#!" + new_interp.encode() + nl
+            if len(new_seg) > _LAUNCHER_MAX_SHEBANG:
+                print(
+                    f"cvcpkg: WARNING: {path.relative_to(root)}: rewritten launcher"
+                    f" shebang would exceed the stub's line buffer, left unrewritten"
+                )
+                continue
+            new_data = data[:sheb_rel] + new_seg + data[arc_start:]
+            try:
+                bad = zipfile.ZipFile(io.BytesIO(new_data)).testzip()
+            except Exception:
+                bad = "<unreadable>"
+            if bad is not None:
+                print(
+                    f"cvcpkg: WARNING: {path.relative_to(root)}: launcher rewrite"
+                    f" produced an unreadable archive ({bad}), left unrewritten"
+                )
+                continue
+            _write_bytes_preserving_mode(path, new_data)
+            count += 1
+    if count:
+        print(f"cvcpkg: rewrote {count} launcher exe(s) to <launcher_dir> form")
+
+
 def build_recipe(
     recipe_dir: Path,
     *,
@@ -1844,6 +2281,15 @@ def build_recipe(
     if not platform:
         platform = detect_platform()
 
+    # Fail fast on a haiku job this builder cannot delegate.  run_build checks
+    # again (it is the last line of defence, and other callers reach it
+    # directly), but by then the source has been downloaded, extracted and
+    # patched — minutes of work and a multi-gigabyte tree for a job whose
+    # outcome was already decided by a missing CVCPKG_HAIKU_SSH.
+    from cvcpkg import haikuhost as _haikuhost
+
+    _haikuhost.ensure_delegatable(platform, host_platform)
+
     # wasm/wasi/cosmo only support static linking — shared libraries are
     # impossible in these environments.  Cosmopolitan produces one-file
     # Actually Portable Executables that statically link everything.
@@ -1855,73 +2301,81 @@ def build_recipe(
         work_dir.mkdir(parents=True, exist_ok=True)
     else:
         work_dir = _mkworkdir(f"cvcpkg-{recipe.name}-", work_dir_root)
-    install_dir = work_dir / "install"
-    build_dir = work_dir / "build"
 
-    # Incremental re-runs reuse an already-staged source tree (recorded in a
-    # marker) rather than re-fetching/re-extracting and re-patching — the latter
-    # would fail (extract into an existing dir, patch an already-patched tree).
-    # Vendored/local sources always build in place: fetch_source returns the
-    # repo tree itself, never a copy, so this is a no-op re-fetch for them.
-    source_marker = work_dir / ".cvcpkg-source"
-    source_dir: Path | None = None
-    if incremental and source_marker.is_file():
-        staged = Path(source_marker.read_text(encoding="utf-8").strip())
-        if staged.is_dir():
-            source_dir = staged
-    if source_dir is None:
-        source_dir = fetch_source(recipe, work_dir, platform=platform)
-        if recipe.patches:
-            apply_patches(recipe, source_dir)
-        if incremental:
-            source_marker.write_text(str(source_dir), encoding="utf-8")
+    # Publish liveness into the scratch root so the fleet's disk reaper can
+    # tell an in-flight build from a leaked one.  Without it the tree looks
+    # abandoned within minutes -- the top directory's mtime stops advancing as
+    # soon as build/ and install/ exist -- and a long build gets rm -rf'd out
+    # from under itself.  See cvcpkg/heartbeat.py and
+    # scripts/reap-stale-build-dirs.sh.
+    with watched(work_dir, label=recipe.name):
+        install_dir = work_dir / "install"
+        build_dir = work_dir / "build"
 
-    ctx = BuildContext(
-        recipe=recipe,
-        platform=platform,
-        config=config,
-        link=link,
-        prefix=prefix or install_dir,
-        source_dir=source_dir,
-        build_dir=build_dir,
-        install_dir=install_dir,
-        work_dir=work_dir,
-        keep_build_dir=keep_build_dir,
-        host_platform=host_platform,
-        cross_toolchain_env=cross_toolchain_env or {},
-        build_prefix=build_prefix,
-    )
+        # Incremental re-runs reuse an already-staged source tree (recorded in a
+        # marker) rather than re-fetching/re-extracting and re-patching — the latter
+        # would fail (extract into an existing dir, patch an already-patched tree).
+        # Vendored/local sources always build in place: fetch_source returns the
+        # repo tree itself, never a copy, so this is a no-op re-fetch for them.
+        source_marker = work_dir / ".cvcpkg-source"
+        source_dir: Path | None = None
+        if incremental and source_marker.is_file():
+            staged = Path(source_marker.read_text(encoding="utf-8").strip())
+            if staged.is_dir():
+                source_dir = staged
+        if source_dir is None:
+            source_dir = fetch_source(recipe, work_dir, platform=platform)
+            if recipe.patches:
+                apply_patches(recipe, source_dir)
+            if incremental:
+                source_marker.write_text(str(source_dir), encoding="utf-8")
 
-    run_build(ctx, log_callback=log_callback)
+        ctx = BuildContext(
+            recipe=recipe,
+            platform=platform,
+            config=config,
+            link=link,
+            prefix=prefix or install_dir,
+            source_dir=source_dir,
+            build_dir=build_dir,
+            install_dir=install_dir,
+            work_dir=work_dir,
+            keep_build_dir=keep_build_dir,
+            host_platform=host_platform,
+            cross_toolchain_env=cross_toolchain_env or {},
+            build_prefix=build_prefix,
+        )
 
-    if recipe.test_script:
-        run_test(ctx, log_callback=log_callback)
+        run_build(ctx, log_callback=log_callback)
 
-    # Boot the artifact we just built and assert against it, if the recipe
-    # asked for that.  Runs AFTER the host-side test and BEFORE staging, so a
-    # guest that cannot boot never becomes a bundle.
-    if recipe.vm_test:
-        run_vm_test(ctx, log_callback=log_callback)
+        if recipe.test_script:
+            run_test(ctx, log_callback=log_callback)
 
-    # If the caller supplied an explicit --prefix that differs from the
-    # per-recipe isolated install_dir, mirror install_dir into it so the
-    # user's prefix actually gets populated. Without this, `cvcpkg build
-    # --prefix X` and the source-fallback install path leave X empty.
-    if prefix is not None and prefix != install_dir and install_dir.is_dir():
-        prefix.mkdir(parents=True, exist_ok=True)
-        # Preserve symlinks (don't follow them): install trees contain relative
-        # version symlinks (libfoo.dylib -> libfoo.N.dylib) and occasionally a
-        # dangling one; following them duplicates content and crashes on broken
-        # links. Matches the staging copy above.
-        _merge_tree(install_dir, prefix)
+        # Boot the artifact we just built and assert against it, if the recipe
+        # asked for that.  Runs AFTER the host-side test and BEFORE staging, so a
+        # guest that cannot boot never becomes a bundle.
+        if recipe.vm_test:
+            run_vm_test(ctx, log_callback=log_callback)
 
-    if not keep_build_dir and not incremental:
-        # Clean up build dir but keep install.  Incremental builds deliberately
-        # keep it so the next run recompiles only what changed.
-        if build_dir.is_dir():
-            shutil.rmtree(build_dir, ignore_errors=True)
+        # If the caller supplied an explicit --prefix that differs from the
+        # per-recipe isolated install_dir, mirror install_dir into it so the
+        # user's prefix actually gets populated. Without this, `cvcpkg build
+        # --prefix X` and the source-fallback install path leave X empty.
+        if prefix is not None and prefix != install_dir and install_dir.is_dir():
+            prefix.mkdir(parents=True, exist_ok=True)
+            # Preserve symlinks (don't follow them): install trees contain relative
+            # version symlinks (libfoo.dylib -> libfoo.N.dylib) and occasionally a
+            # dangling one; following them duplicates content and crashes on broken
+            # links. Matches the staging copy above.
+            _merge_tree(install_dir, prefix)
 
-    return ctx
+        if not keep_build_dir and not incremental:
+            # Clean up build dir but keep install.  Incremental builds deliberately
+            # keep it so the next run recompiles only what changed.
+            if build_dir.is_dir():
+                shutil.rmtree(build_dir, ignore_errors=True)
+
+        return ctx
 
 
 def pack_recipe(
@@ -1958,16 +2412,18 @@ def pack_recipe(
     from cvcpkg.platform import detect_arch, detect_platform
 
     recipe = Recipe.load(recipe_dir)
-    is_any = _is_any_recipe(recipe)
 
     if not arch:
         arch = detect_arch()
+    # The platform this bundle is being built FOR; empty means "this host".
+    target_platform = platform or detect_platform()
     # The host we actually build on. "any" is not a real host, so fall back to
     # the detected platform for the compile/install step.
-    build_platform = platform or detect_platform()
-    if build_platform == "any":
-        build_platform = detect_platform()
-    # The package identity: noarch for an 'any' recipe, else the build target.
+    build_platform = detect_platform() if target_platform == "any" else target_platform
+    # The package identity follows the matrix entry that drives THIS build: a
+    # target served by the `any` fallback publishes one noarch bundle shared by
+    # every such target, a target with its own entry publishes under that name.
+    is_any = _serves_target_via_any(recipe, target_platform, host_platform)
     pkg_platform = "any" if is_any else build_platform
     pkg_arch = "noarch" if is_any else arch
 
@@ -2047,7 +2503,13 @@ def pack_recipe(
     # have disturbed — fail later in stage_bundle with a clearer cause than a
     # bare FileNotFoundError on mkdir.
     staging.mkdir(parents=True, exist_ok=True)
-    stage_bundle(ctx.install_dir, manifest, staging, recipe_dir=ctx.recipe.recipe_dir)
+    stage_bundle(
+        ctx.install_dir,
+        manifest,
+        staging,
+        recipe_dir=ctx.recipe.recipe_dir,
+        temp_prefixes=(ctx.prefix, ctx.build_prefix, ctx.install_dir),
+    )
 
     archive_path, sha256, size = create_archive(
         staging,
@@ -2160,7 +2622,13 @@ def pack_from_prefix(
 
     staging = Path(tempfile.mkdtemp(prefix=f"cvcpkg-pack-{recipe.name}-"))
     try:
-        stage_bundle(prefix, manifest, staging, recipe_dir=recipe.recipe_dir)
+        stage_bundle(
+            prefix,
+            manifest,
+            staging,
+            recipe_dir=recipe.recipe_dir,
+            temp_prefixes=(prefix,),
+        )
         archive_path, sha256, size = create_archive(
             staging,
             output_dir,
@@ -2454,13 +2922,18 @@ def _detect_arch_for_platform(platform: str) -> str:
     return detect_arch()
 
 
-def _is_any_recipe(recipe: Recipe) -> bool:
-    """Return True if *recipe* is platform-independent.
+def _serves_target_via_any(recipe: Recipe, platform: str, host_platform: str = "") -> bool:
+    """True when *recipe*'s build for *platform* is driven by its ``any`` entry.
 
-    A recipe is platform-independent when all of its build matrix
-    entries use ``platform: any``.
+    Such a build publishes one noarch bundle shared by every target the ``any``
+    entry serves; a target with its own matrix entry publishes under that
+    target's own name.  See :func:`cvcpkg.platform.served_by_any_entry` for why
+    this is decided per target rather than per recipe.
     """
-    return bool(recipe.build_matrix) and all(m.platform == "any" for m in recipe.build_matrix)
+    from cvcpkg.platform import served_by_any_entry
+
+    del host_platform  # entry selection for identity keys off the target only
+    return served_by_any_entry([m.platform for m in recipe.build_matrix], platform)
 
 
 def _common_scripts_hash(recipes_dir: Path) -> str:
@@ -2830,6 +3303,13 @@ def build_all(
     if not host_platform:
         host_platform = native_platform
 
+    # Fail fast, before the first fetch: a haiku target this builder cannot
+    # delegate fails EVERY recipe in the run, so finding that out after
+    # downloading and patching the first one wastes the whole difference.
+    from cvcpkg import haikuhost as _haikuhost
+
+    _haikuhost.ensure_delegatable(platform, host_platform)
+
     recipes = [
         r
         for r in all_recipes
@@ -2878,6 +3358,17 @@ def build_all(
 
     if prefix is None:
         prefix = _mkworkdir("cvcpkg-all-", work_dir_root)
+        # A shared prefix we created ourselves is scratch, and it is the
+        # longest-lived tree in the process: `cvcpkg build-all` merges every
+        # component into it over hours.  Its top-level mtime stops advancing
+        # once bin/ lib/ include/ exist, so without a heartbeat the disk reaper
+        # reads it as abandoned and deletes the prefix the build is installing
+        # into.  Released at the single return below.  If build_all raises
+        # instead, the watch outlives the call: harmless, because it is one
+        # entry on a shared daemon thread that drops any root once the
+        # directory is gone, and `cvcpkg build-all` is a one-per-process CLI
+        # entry point rather than something the long-lived builder daemon runs.
+        watch(prefix, label="build-all")
     prefix = prefix.resolve()
 
     # Destination for the build-dependency closure (host tools / toolchains and
@@ -3119,9 +3610,10 @@ def build_all(
         label = "" if is_assigned else " (dep)"
         print(f"\ncvcpkg: == {recipe.name} ({recipe.full_version}){label} ==")
 
-        # For platform-independent recipes, use "any"/"noarch" so
-        # a single cache entry is shared across all target platforms.
-        eff_platform = "any" if _is_any_recipe(recipe) else platform
+        # When this target is served by the recipe's `any` entry, use
+        # "any"/"noarch" so a single cache entry is shared across every target
+        # that entry covers.  A target with its own entry keeps its own key.
+        eff_platform = "any" if _serves_target_via_any(recipe, platform) else platform
         eff_arch = _detect_arch_for_platform(eff_platform)
 
         # Build cache lookup.
@@ -3370,6 +3862,11 @@ def build_all(
     else:
         cache_msg = f" ({cache_hits} cache hits)" if cache_hits else ""
         print(f"\ncvcpkg: all {len(contexts)} components built into {prefix}{cache_msg}")
+
+    # Work has stopped, so stop claiming the prefix is alive.  The final beat
+    # unwatch() emits resets the tree's age to *now*, which is what the reaper
+    # should count from if this process dies before anything cleans up.
+    unwatch(prefix)
 
     # Attach failures to the returned list for callers to inspect.
     contexts.failures = failures

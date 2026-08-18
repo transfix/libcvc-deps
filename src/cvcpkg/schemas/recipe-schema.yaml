@@ -99,6 +99,23 @@ properties:
       `provides` the same slot as its CPU peer wins on a CUDA host and is
       filtered out elsewhere.  See platform capability probing / resolver.
 
+  prebuilt_payload:
+    type: boolean
+    description: >
+      The linux payload is a prebuilt binary (a manylinux wheel, a vendor
+      tarball) rather than something compiled here, so its glibc floor is
+      fixed by whoever built it and this builder's own glibc never enters the
+      bundle.  Set this to drop the `glibc<floor>` capability from the
+      recipe's build jobs, which otherwise pins them to builders at or below
+      the fleet floor.  Routing only: the pack-time floor gate still scans the
+      staged tree against the SAME default floor, so a payload that really
+      does need a newer glibc fails the build loudly rather than publishing
+      something that will not start.  Needed when another
+      `requires_capabilities` entry already pins the recipe to a host that
+      cannot satisfy the floor — `cuda` is served by one builder, on glibc
+      2.39, so `cuda` + `glibc2.35` was unsatisfiable and torch-cp311-cuda
+      could not be built at all.
+
   cross_toolchain:
     $ref: "#/$defs/cross_toolchain_block"
 
@@ -295,7 +312,20 @@ $defs:
         type: array
         items:
           type: string
-          enum: [linux, macos, windows, windows-gnu, wasm, wasi, cosmo, freebsd, openbsd, netbsd]
+          enum:
+            [
+              linux,
+              macos,
+              windows,
+              windows-gnu,
+              wasm,
+              wasi,
+              cosmo,
+              freebsd,
+              openbsd,
+              netbsd,
+              haiku,
+            ]
         minItems: 1
         description: "Platforms this dependency applies to (omit for all)"
 
@@ -357,13 +387,14 @@ $defs:
             freebsd,
             openbsd,
             netbsd,
+            haiku,
           ]
         description: >
           `any` marks a platform-independent recipe (Phase 14 source recipes
           and pure-Python wheels): built once, valid everywhere, arch noarch.
       host_platform:
         type: string
-        enum: [linux, macos, windows, freebsd, openbsd, netbsd]
+        enum: [linux, macos, windows, freebsd, openbsd, netbsd, haiku]
         description: "Host platform for cross-compilation (e.g. linux for wasm builds)"
       script:
         type: string
@@ -510,7 +541,20 @@ $defs:
         type: array
         items:
           type: string
-          enum: [linux, macos, windows, windows-gnu, wasm, wasi, cosmo, freebsd, openbsd, netbsd]
+          enum:
+            [
+              linux,
+              macos,
+              windows,
+              windows-gnu,
+              wasm,
+              wasi,
+              cosmo,
+              freebsd,
+              openbsd,
+              netbsd,
+              haiku,
+            ]
         minItems: 1
         description: "Target platforms this toolchain can cross-compile for"
       env:

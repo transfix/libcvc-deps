@@ -4,13 +4,14 @@ These exist because the two can drift apart silently.  The builder's own tests
 construct recipes in tmp_path and never touch packaging/validate.py, while
 validate.py only ever walks recipes/ — so a feature can be fully implemented,
 fully unit-tested, and still be impossible to express in a real recipe.  That
-is exactly how `platform: any` shipped unusable: _is_any_recipe honoured it,
+is exactly how `platform: any` shipped unusable: the builder honoured it,
 the Phase 14 end-to-end test exercised it from a temp dir, and the schema
 rejected it for anything under recipes/.
 """
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -59,7 +60,7 @@ class TestPlatformAny:
     def test_builder_and_schema_agree_on_any(self, schema):
         # Guard the specific drift: the builder treats "any" as special, so the
         # schema must permit the value the builder keys on.
-        from cvcpkg.builder import MatrixEntry, Recipe, SourceSpec, _is_any_recipe
+        from cvcpkg.builder import MatrixEntry, Recipe, SourceSpec, _serves_target_via_any
 
         r = _recipe(build={"matrix": [{"platform": "any", "script": "build.sh"}]})
         assert _valid(schema, r)
@@ -76,7 +77,7 @@ class TestPlatformAny:
             raw=r,
             recipe_dir=Path("."),
         )
-        assert _is_any_recipe(recipe) is True
+        assert _serves_target_via_any(recipe, "linux") is True
 
     def test_bogus_platform_still_rejected(self, schema):
         # The enum must not have been loosened into a free-form string.
@@ -271,4 +272,44 @@ class TestReadmeRecipeExamples:
         assert not offenders, (
             "README yaml blocks put recipe fields at the top level instead of "
             f"under `recipe:` (blocks: {offenders})"
+        )
+
+
+class TestAbiOnlyWhereItMeansSomething:
+    """``abi.cxx_std`` describes the C++ ABI of the libraries a package exposes.
+
+    A package that ships no libraries, headers or executables to link or
+    compile against has no such surface, so declaring one is noise that reads
+    as though consumers must ABI-match against it.  ca-bundle carried
+    ``cxx_std: 17`` while shipping a single PEM file; cosmocc and msys2 carried
+    it while shipping a toolchain directory nothing links against.
+
+    Removing it is behaviour-preserving: manifest.AbiTag defaults cxx_std to
+    17 and the parser reads ``abi_raw.get("cxx_std", 17)``, so an absent block
+    and an explicit ``cxx_std: 17`` produce an identical AbiTag.
+    """
+
+    # A payload entry that implies something to link or compile against.
+    _LIBISH = re.compile(r"(^|/)(lib|lib64|include|bin)/|\.(so|a|dylib|dll|lib|h|hpp)\b")
+
+    def test_no_abi_block_without_a_linkable_payload(self):
+        offenders = []
+        recipes_dir = REPO_ROOT / "recipes"
+        for d in sorted(recipes_dir.iterdir()):
+            f = d / "recipe.yaml"
+            if not f.is_file():
+                continue
+            with open(f, encoding="utf-8") as fh:
+                r = yaml.safe_load(fh) or {}
+            if "abi" not in r:
+                continue
+            files = (r.get("package") or {}).get("files") or []
+            cmake_pkgs = (r.get("package") or {}).get("cmake_packages") or []
+            if cmake_pkgs:
+                continue  # consumers link against it; the ABI tag is real
+            if not any(self._LIBISH.search(str(x)) for x in files):
+                offenders.append(f"{d.name}: files={files}")
+        assert not offenders, (
+            "recipes declare an abi block but ship nothing to link or compile "
+            "against:\n  " + "\n  ".join(offenders)
         )
