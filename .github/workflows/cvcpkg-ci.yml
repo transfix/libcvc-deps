@@ -324,7 +324,14 @@ jobs:
       - name: Run Playwright browser tests
         working-directory: .
         run: |
-          docker compose -f docker-compose.test.yml run --build --rm playwright
+          # NO --build. `Start test stack` above already built this image with
+          # --no-cache, in this same job, from this same compose file. --build
+          # rebuilt it a SECOND time: minutes of duplicated work, and a second
+          # place to lose the buildkit content-store race -- which is exactly
+          # where #503 died, in this step rather than the one #505 wrapped in a
+          # retry. Removing the redundant build removes the collision site
+          # instead of retrying it.
+          docker compose -f docker-compose.test.yml run --rm playwright
 
       - name: Collect logs on failure
         if: failure()
