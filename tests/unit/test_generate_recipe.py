@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import sys
+
 import pytest
 
 from cvcpkg.cli._generate import (
@@ -148,6 +150,14 @@ class TestMeson:
         assert info.deps == ["zlib"]
 
 
+# pyproject parsing needs tomllib, which is stdlib only from 3.11. _generate
+# handles its absence deliberately -- it appends the warning "tomllib
+# unavailable; pyproject.toml not parsed" and leaves the fields empty rather
+# than guessing -- so on 3.10 these assertions describe a capability the
+# interpreter does not have. Without this marker they fail as
+#   assert ('', '') == ('potool', '1.1')
+# which reads like a parser bug rather than a missing stdlib module.
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="tomllib is stdlib only on 3.11+")
 class TestPython:
     def test_pep621(self, tmp_path):
         (tmp_path / "pyproject.toml").write_text(
