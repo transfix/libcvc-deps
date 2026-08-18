@@ -223,6 +223,13 @@ SCRIPT_PACKAGES = {
     "pytest": ["pytest", "py.test"],
     "sympy": ["isympy"],
     "tqdm": ["tqdm"],
+    # NEW at 2026.6.1.19: setup.py gained a console_scripts entry point the old
+    # 2024.10.16 pin did not have, so moving the pin silently started shipping
+    # bin/trove-classifiers in every column.  package.files is declarative only
+    # (stage_bundle copies the whole install tree), so the script ships either
+    # way; listing it here is what turns an undeclared last-extract-wins bin/
+    # overlap into a declared, mutually-exclusive provides slot.
+    "trove-classifiers": ["trove-classifiers"],
     "uvicorn": ["uvicorn"],
     "wheel": ["wheel"],
 }
@@ -513,6 +520,18 @@ SEED_PACKAGES = {
         "version": "9.1.1",
         "license": "MIT",
         "deps": ["iniconfig", "packaging", "pluggy", "pygments"],
+        # NOT in [build-system] requires, and deliberately declared anyway.
+        # setuptools validates project.classifiers against trove_classifiers
+        # only when that package happens to be IMPORTABLE: absent, it skips
+        # validation and the build passes; present-and-stale, it hard-fails.
+        # The fleet builder shares one prefix between jobs, so a sibling
+        # recipe's trove-classifiers leaked in and decided this build's
+        # outcome — pytest 9.1.1 declares "Programming Language :: Python ::
+        # 3.15", which the old 2024.10.16 pin rejected.  Declaring the edge
+        # makes the input explicit: the resolver stages the CURRENT
+        # trove-classifiers and the DAG orders it before this column, instead
+        # of the result depending on what else the builder happened to build.
+        "build_deps": ["trove-classifiers"],
         "files": ["_pytest/", "pytest/", "py.py", "pytest-*.dist-info/"],
         "check": "import pytest",
     },
@@ -558,10 +577,20 @@ SEED_PACKAGES = {
         "check": "import calver",
     },
     "trove-classifiers": {
-        # Calendar-versioned. Pinned to a THREE-component release: cvcpkg's
-        # validator requires an orderable SemVer upstream_version, and the
-        # usual YYYY.M.D.HH form has four components (validate.py rejects it).
-        "version": "2024.10.16",
+        # THE classifier database: hatchling imports it unconditionally, and
+        # setuptools' pyproject validation uses it whenever it is importable.
+        # A stale copy fails any sdist declaring a classifier newer than the
+        # pin — 2024.10.16 predates "Programming Language :: Python :: 3.15"
+        # and so blocked black (hatchling) and pytest (setuptools) outright.
+        # Keep this current; it is a data package, not an API surface.
+        #
+        # Calendar-versioned. This was pinned to a THREE-component release
+        # because a four-component YYYY.M.D.HH does not parse as SemVer, but
+        # 2024.10.16 is the LAST such release upstream ever made — every
+        # release since is four-component, so the pin could never move again.
+        # semver() now encodes the fourth component as a pre-release
+        # (2026.6.1.19 -> 2026.6.1-19), which parses and sorts correctly.
+        "version": "2026.6.1.19",
         "license": "Apache-2.0",
         "deps": ["calver"],
         "files": ["trove_classifiers/", "trove_classifiers-*.dist-info/"],
@@ -671,13 +700,29 @@ SEED_PACKAGES = {
         "files": ["fontTools/", "fonttools-*.dist-info/"],
         "check": "import fontTools",
     },
+    # contourpy is plain generated output again.  It was hand-converted for two
+    # revisions because meson's dependency('pybind11') could not find the staged
+    # pybind11 — bin/pybind11-config had a dead ephemeral-prefix shebang, so the
+    # config-tool probe failed and build.sh had to hand-feed the .pc dir and the
+    # header dir.  Relocatable console-script shebangs (pybind11 2.13.6+cvc.3)
+    # fixed that at the source: the build prefix's bin/ is first on PATH, so
+    # meson's Pybind11ConfigToolDependency resolves with no help from a recipe.
     "contourpy": {
         "version": "1.3.1",
         "license": "BSD-3-Clause",
         "deps": ["numpy"],
+        # Capped like pillow: a cp313t column would dangle on pybind11-cp313t,
+        # which is not published.  Extend only alongside that column.
+        "interpreters": ["311", "312", "313"],
         "files": ["contourpy/", "contourpy-*.dist-info/"],
         "check": "import contourpy",
     },
+    # NOTE: the matplotlib-cp31X recipes on disk are HAND-CONVERTED (no
+    # generator marker): they link cvcpkg's freetype + qhull via
+    # -Dsystem-freetype/-Dsystem-qhull (the default meson wraps DOWNLOAD both,
+    # impossible on offline builders), resolve the staged pybind11 the way
+    # contourpy does, stamp an $ORIGIN RUNPATH and verify a real Agg render.
+    # The seed stays for dep-edge resolution and column viability.
     "matplotlib": {
         "version": "3.10.0",
         "license": "PSF-2.0",
@@ -782,8 +827,24 @@ def norm(name: str) -> str:
 def semver(version: str) -> str:
     """The orderable numeric prefix of a PEP440 version for upstream_version.
     e.g. '2.9.0.post0' -> '2.9.0', '1.0.0rc1' -> '1.0.0'. The pinned wheel URL
-    (the exact locked build) is unaffected — this is just the display version."""
-    return re.match(r"\d+(?:\.\d+)*", version).group(0)
+    (the exact locked build) is unaffected — this is just the display version.
+
+    A FOURTH numeric component ('2026.6.1.19' — the YYYY.M.D.HH calver
+    trove-classifiers moved to permanently after 2024.10.16, its last
+    three-component release) is not SemVer: cvcpkg.semver.Version parses at
+    most major.minor.patch, so validation.py rejects the minted version AND
+    version_sort_key ranks it below every parseable sibling — the new recipe
+    could never be selected over the very version it replaces.  Carry the
+    extra components in the pre-release field instead ('2026.6.1-19').  That
+    parses, and because SemVer compares pre-release identifiers numerically it
+    preserves upstream's own ordering exactly:
+    '2026.5.20-13' < '2026.5.20-19' < '2026.5.22-10' < '2026.6.1-19'.
+    Truncating to three components would not — upstream ships more than one
+    release on the same day (2026.5.20.13 and 2026.5.20.19), so two distinct
+    releases would collapse to one indistinguishable upstream_version."""
+    parts = re.match(r"\d+(?:\.\d+)*", version).group(0).split(".")
+    tail = ".".join(parts[3:])
+    return ".".join(parts[:3]) + (f"-{tail}" if tail else "")
 
 
 def col_version(interp: str) -> str:
@@ -1498,6 +1559,9 @@ def main() -> int:
             "files": seed.get("files"),
             "check": seed.get("check"),
             "interpreters": seed.get("interpreters"),
+            # Build-only edges beyond the sdist's [build-system] requires, for
+            # backends that consult a package opportunistically (see pytest).
+            "build_deps": seed.get("build_deps", []),
             "seed": True,
         }
 
@@ -1742,6 +1806,14 @@ def _emit_column(out, base, m, interp, meta, cols, extra_universe=frozenset()):
     # From-source columns additionally need the PEP-517 backend importable at
     # build time (--no-build-isolation); those are build-only edges.
     backends = backend_edges(m.get("build_requires", []), interp) if mode == "sdist" else []
+    # Seed-declared build-only edges the sdist's [build-system] requires does
+    # not name (a backend that consults a package only if it is importable).
+    if mode == "sdist":
+        backends += [
+            f"{b}-cp{interp}"
+            for b in m.get("build_deps") or []
+            if f"{b}-cp{interp}" not in backends
+        ]
 
     if mode == "sdist":
         flavor = {

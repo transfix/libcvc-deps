@@ -10,6 +10,7 @@ import platform
 import re
 import struct
 import sys
+from collections.abc import Sequence
 
 # Canonical vocabularies for the package keyspace. The catalog is keyed by
 # these exact strings; every ingestion boundary (CLI detection, composite
@@ -26,6 +27,7 @@ CANONICAL_PLATFORMS = frozenset(
         "freebsd",
         "openbsd",
         "netbsd",
+        "haiku",
         "wasm",
         "wasi",
         "cosmo",
@@ -78,6 +80,39 @@ def noarch_build_target() -> tuple[str, str]:
     )
 
 
+PLATFORM_ALIASES = {"win": "windows"}
+
+
+def served_by_any_entry(matrix_platforms: Sequence[str], target: str) -> bool:
+    """True when a build for *target* is driven by a recipe's ``platform: any`` entry.
+
+    A recipe's matrix maps target platforms to build scripts, and ``any`` is the
+    fallback for every target without an entry of its own.  That fallback is
+    also what decides the bundle's *identity*: targets served by it share one
+    noarch bundle, while a target with its own entry gets a bundle tagged for it.
+
+    Deriving this per target — rather than from the recipe as a whole ("every
+    entry is ``any``") — is load-bearing.  Pure-Python columns carry an ``any``
+    entry for ``build.sh`` plus a ``windows`` entry for ``build.ps1`` (Windows
+    needs PowerShell and installs to ``Lib/site-packages`` rather than
+    ``lib/pythonX.Y/site-packages``).  Under the whole-recipe test that second
+    entry silently re-tagged the *other* platforms' bundles as host-specific, so
+    one noarch bundle valid everywhere became a linux-only bundle plus a stale
+    noarch one, and macOS/BSD quietly resolved the older revision forever.
+    """
+    plats = {PLATFORM_ALIASES.get(p, p) for p in matrix_platforms if p}
+    if not plats:
+        return False
+    if "any" not in plats:
+        return False
+    norm_target = PLATFORM_ALIASES.get(target, target)
+    # An explicit request to build "any" is the noarch build itself.
+    if not norm_target or norm_target == "any":
+        return True
+    # A target with its own entry is built by it, not by the fallback.
+    return norm_target not in plats
+
+
 def platform_matches(bundle_platform: str, requested: str) -> bool:
     """True when a bundle's ``platform`` satisfies a host's *requested* platform.
 
@@ -107,7 +142,10 @@ def normalize_arch(value: str) -> str:
 
 
 def detect_platform() -> str:
-    """Return 'linux', 'macos', 'windows', 'freebsd', 'openbsd', or 'netbsd'.
+    """Return the canonical platform tag for the current host.
+
+    One of 'linux', 'macos', 'windows', 'freebsd', 'openbsd', 'netbsd',
+    or 'haiku' (DragonFly BSD detects as 'freebsd' — see below).
 
     GhostBSD note: GhostBSD's kernel identifies as FreeBSD (sys.platform
     is ``freebsd*``), so GhostBSD hosts intentionally detect as
@@ -137,6 +175,14 @@ def detect_platform() -> str:
         return "netbsd"
     if s.startswith("dragonfly"):
         return "freebsd"
+    if s.startswith("haiku"):
+        # Haiku's sys.platform is tri-valued and depends on which CPython the
+        # host happens to run: upstream CPython reports "haiku1" (the
+        # MACHDEP autoconf default appends the major version), HaikuPorts'
+        # python3 carries a MACHDEP patch that reports the bare "haiku", and
+        # some builds report the full ABI string "haikuR1~beta5".  Prefix
+        # matching is the only spelling-independent test — never compare ==.
+        return "haiku"
     raise RuntimeError(f"unsupported platform: {s}")
 
 
@@ -157,7 +203,29 @@ def detect_arch() -> str:
     if arch:
         return arch
     # Accept any machine string rather than crashing on new architectures.
+    # (Haiku x86_64 reports "x86_64" and needs no special case; only its
+    # 32-bit port reports the legacy "BePC", and 32-bit x86 is not a
+    # canonical arch here — no Haiku x86 builder exists.)
     return machine
+
+
+def lib_path_var(plat: str) -> str:
+    """Return the run-time linker's library-search environment variable.
+
+    Every POSIX platform we build for uses ``LD_LIBRARY_PATH`` except two:
+    macOS's dyld reads ``DYLD_LIBRARY_PATH``, and Haiku's ``runtime_loader``
+    reads ``LIBRARY_PATH`` (it ignores ``LD_LIBRARY_PATH`` entirely — exporting
+    the wrong name there fails silently, and the build only dies later with an
+    unresolvable symbol from a dependency the prefix definitely contains).
+
+    Windows has no such variable (DLLs resolve from ``PATH``), so callers that
+    care handle it separately; this returns the POSIX default for it.
+    """
+    if plat == "macos":
+        return "DYLD_LIBRARY_PATH"
+    if plat == "haiku":
+        return "LIBRARY_PATH"
+    return "LD_LIBRARY_PATH"
 
 
 def detect_pointer_size() -> int:
@@ -178,6 +246,12 @@ def detect_libc() -> str:
         return "openbsd-libc"
     if plat == "netbsd":
         return "netbsd-libc"
+    if plat == "haiku":
+        # Haiku's C library is libroot.so — there is no libc.so.6, so without
+        # this branch Haiku fell through to the Linux probe below, the
+        # ctypes.CDLL("libc.so.6") raised OSError, and every Haiku host was
+        # mislabelled "musl" in the ABI tuple.
+        return "haiku-libroot"
     # Linux: try to distinguish glibc vs musl.
     try:
         import ctypes
