@@ -290,7 +290,7 @@ jobs:
           # status and every failed build would look like a success.
           set -o pipefail
           build_images() {
-            docker compose -f docker-compose.test.yml build --no-cache test playwright
+            docker compose -f docker-compose.test.yml build --no-cache test playwright backend
           }
           for attempt in 1 2 3; do
             if build_images 2>&1 | tee /tmp/build.log; then
@@ -308,7 +308,12 @@ jobs:
             sleep $((attempt * 20))
           done
 
-          docker compose -f docker-compose.test.yml up -d --build postgres backend
+          # `backend` is built inside the retry above, so no --build here. It was
+          # the THIRD build site and the one still unprotected: the test/playwright
+          # build succeeded, the loop broke, and then this line hit the same
+          # content-store race with no retry around it -- which is why #508's own
+          # run failed with no retry warning in the log.
+          docker compose -f docker-compose.test.yml up -d postgres backend
           echo "Waiting for backend health..."
           timeout 120 bash -c 'until curl -sf http://127.0.0.1:8421/healthz; do sleep 2; done'
           echo ""
@@ -319,7 +324,8 @@ jobs:
         env:
           CVCPKG_TEST_SERVER_URL: http://127.0.0.1:8421
         run: |
-          docker compose -f docker-compose.test.yml run --build --rm test
+          # No --build: `test` is built inside the retry in `Start test stack`.
+          docker compose -f docker-compose.test.yml run --rm test
 
       - name: Run Playwright browser tests
         working-directory: .
