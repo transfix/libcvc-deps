@@ -202,6 +202,22 @@ jobs:
   # Only runs on the self-hosted prod runner where Docker is
   # available.
   integration:
+    # Serialise this job across the WHOLE repo, not per-ref.
+    #
+    # The workflow-level group is cvcpkg-ci-${{ github.ref }}, so every open
+    # PR runs its own copy of this job at the same time -- and they all land
+    # on ONE self-hosted docker daemon that is already shared with seven other
+    # runner services. Three of them overlapping is what exhausted the retry
+    # added in #505: contention on all 3 attempts, the last after 8 minutes of
+    # building, because `--no-cache` rebuilds every layer and each layer is a
+    # fresh chance to collide on the content store.
+    #
+    # Retrying harder does not fix a build that is structurally maximally
+    # exposed. Not racing ourselves does. cancel-in-progress is false: these
+    # runs should queue, never cancel each other.
+    concurrency:
+      group: cvcpkg-docker-integration
+      cancel-in-progress: false
     name: Integration tests (Docker)
     # Self-hosted runner safety.  For `pull_request`, GitHub evaluates the
     # workflow definition from the PR's own merge ref, so a fork PR can edit
