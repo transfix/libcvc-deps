@@ -101,7 +101,11 @@ jobs:
   build-shard:
     name: Windows shard ${{ matrix.shard }}/${{ inputs.shards || '4' }} (${{ inputs.config }}/${{ inputs.link }})
     needs: setup
-    runs-on: windows-latest
+    # Pin to windows-2022 (VS 2022 / toolset v143). `windows-latest` has drifted to
+    # Visual Studio 18 (2026, MSVC 14.51), which CPython 3.11's PCbuild props don't
+    # recognise — MSBuild falls back to requesting the v140 (VS2015) toolset and dies
+    # with MSB8020. v143 is the newest toolset CPython 3.11 builds against cleanly.
+    runs-on: windows-2022
     timeout-minutes: 350
     strategy:
       fail-fast: false
