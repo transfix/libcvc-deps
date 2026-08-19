@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import sys
 import tarfile
 import zipfile
 
@@ -276,6 +277,14 @@ class TestRequireSignatures:
 # ── Windows site-packages relocation ────────────────────────────
 
 
+# These tests distinguish `Lib/site-packages` from `lib/python*/site-packages`,
+# which only differ on a case-sensitive filesystem. macOS and Windows default to
+# case-insensitive (Lib == lib), so the fixtures collide there. The remap code
+# path is Windows-only anyway; exercise it on the case-sensitive CI (Linux).
+@pytest.mark.skipif(
+    sys.platform in ("darwin", "win32"),
+    reason="Lib and lib collide on case-insensitive filesystems",
+)
 class TestRelocateWindowsSitePackages:
     def test_relocates_unix_site_to_windows_site(self, tmp_path):
         prefix = tmp_path / "prefix"

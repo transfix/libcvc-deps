@@ -13,13 +13,13 @@ if (-not (Test-Path $srcLlvm)) {
 }
 
 cmake -G Ninja `
-    -S $srcLlvm `
-    -B $env:CVC_BUILD_DIR `
-    -DCMAKE_INSTALL_PREFIX=$env:CVC_INSTALL_DIR `
+    -S "$srcLlvm" `
+    -B "$env:CVC_BUILD_DIR" `
+    "-DCMAKE_INSTALL_PREFIX=$env:CVC_INSTALL_DIR" `
     -DCMAKE_BUILD_TYPE=Release `
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON `
     -DCMAKE_CXX_STANDARD=17 `
-    -DCMAKE_PREFIX_PATH=$env:CVC_DEPS_PREFIX `
+    "-DCMAKE_PREFIX_PATH=$env:CVC_DEPS_PREFIX" `
     -DLLVM_ENABLE_PROJECTS="clang;lld" `
     -DLLVM_TARGETS_TO_BUILD="X86;AArch64;WebAssembly" `
     -DLLVM_INCLUDE_TESTS=OFF `
