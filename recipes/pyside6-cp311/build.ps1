@@ -83,3 +83,8 @@ if ($LASTEXITCODE -ne 0) { throw "pyside6: cmake build failed" }
 
 & cmake --install $env:CVC_BUILD_DIR
 if ($LASTEXITCODE -ne 0) { throw "pyside6: cmake install failed" }
+
+# Make the installed .cmake/.pc files relocatable (see shiboken6-cp311 build.ps1)
+# — cmake otherwise bakes the absolute build-time CVC_INSTALL_DIR into
+# PySide6Config, breaking downstream find_package(PySide6).
+Invoke-CvcRewriteInstallPaths

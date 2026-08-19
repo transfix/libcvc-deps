@@ -93,3 +93,12 @@ if ($LASTEXITCODE -ne 0) { throw "shiboken6: cmake build failed" }
 
 & cmake --install $env:CVC_BUILD_DIR
 if ($LASTEXITCODE -ne 0) { throw "shiboken6: cmake install failed" }
+
+# Make the installed .cmake/.pc files relocatable. cmake bakes the absolute
+# build-time CVC_INSTALL_DIR (with backslashes) into Shiboken6Config.abi3.cmake's
+# SHIBOKEN_PYTHON_MODULE_DIR; a downstream find_package(Shiboken6) (pyside6) then
+# fails to even parse it ("Invalid character escape '\U'" from C:\Users\...) and
+# can't locate the module. Rewrite absolute paths to a ${CMAKE_CURRENT_LIST_DIR}
+# anchor — the raw-cmake analog of what Invoke-CvcCMakeBuild does automatically,
+# and the Windows counterpart of build.sh's cvc_rewrite_install_paths.
+Invoke-CvcRewriteInstallPaths
