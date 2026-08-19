@@ -63,6 +63,41 @@ function Compress-CvcPathForMsvc {
 
 Compress-CvcPathForMsvc
 
+# Restore the MSVC toolchain env AFTER trimming PATH.
+#
+# Compress-CvcPathForMsvc drops the MSVC dirs msvc-dev-cmd put on PATH. That is
+# fine for setuptools (it re-runs vcvarsall itself), but meson probes for a C
+# compiler at configure time and needs cl.exe + INCLUDE/LIB already present — it
+# tries cc/gcc/clang/clang-cl/pgcc and dies with
+#   Running `cc --version` gave "[WinError 2] The system cannot find the file specified"
+# (it never even reaches cl). Source vcvars64 into the process via a temp .cmd
+# (robust quoting; same technique as env-windows.ps1's Import-CvcMsvcEnv). The
+# lean already gave the PATH headroom, so vcvars' additions stay well under cmd's
+# ~8 KB limit. Harmless for setuptools builds. No-op off a VS-equipped runner.
+function Import-CvcVcvarsForWheel {
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+    if (-not (Test-Path $vswhere)) { $vswhere = Join-Path $env:ProgramFiles 'Microsoft Visual Studio\Installer\vswhere.exe' }
+    if (-not (Test-Path $vswhere)) { return }
+    $vsRoot = & $vswhere -latest -products '*' `
+        -requires 'Microsoft.VisualStudio.Component.VC.Tools.x86.x64' `
+        -property installationPath 2>$null | Select-Object -First 1
+    if (-not $vsRoot) { return }
+    $vcvars = Join-Path $vsRoot 'VC\Auxiliary\Build\vcvars64.bat'
+    if (-not (Test-Path $vcvars)) { return }
+    $helper = Join-Path ([System.IO.Path]::GetTempPath()) ("cvc-vcvars-wheel-{0}.cmd" -f ([guid]::NewGuid().ToString('N')))
+    Set-Content -LiteralPath $helper -Value ("@echo off`r`ncall `"$vcvars`" >nul 2>&1`r`nset") -Encoding Ascii
+    try { $dump = & cmd.exe /c $helper } finally { Remove-Item -LiteralPath $helper -ErrorAction SilentlyContinue }
+    foreach ($line in $dump) {
+        if ($line -match '^([^=]+)=(.*)$') {
+            $n = $matches[1]; $v = $matches[2]
+            if ($n -in @('_', 'PROMPT')) { continue }
+            [Environment]::SetEnvironmentVariable($n, $v, 'Process')
+        }
+    }
+}
+
+Import-CvcVcvarsForWheel
+
 # Make the prefixes' console scripts and pkg-config metadata discoverable.
 #
 # A meson/setuptools sdist build finds its tooling by RUNNING it off PATH, not
