@@ -45,9 +45,16 @@ Write-Host "pyside6: LLVM_INSTALL_DIR=$($env:LLVM_INSTALL_DIR)"
 $depsPrefix = if ($env:CVC_DEPS_PREFIX) { $env:CVC_DEPS_PREFIX } else { $env:CVC_INSTALL_DIR }
 $env:PATH = "$($env:LLVM_INSTALL_DIR)\bin;$depsPrefix\bin;$env:CVC_BUILD_PREFIX\bin;$env:CVC_INSTALL_DIR\bin;$env:PATH"
 
-# Windows site-packages is <prefix>\Lib\site-packages.
-$sitePackages = "$env:CVC_INSTALL_DIR\Lib\site-packages"
-$prefixPath = if ($env:CMAKE_PREFIX_PATH) { $env:CMAKE_PREFIX_PATH } else { $depsPrefix }
+# Pass FORWARD-SLASH paths to cmake — a backslash baked into a generated config
+# (\Lib -> \L) is an invalid CMake string escape downstream (see shiboken6 build.ps1).
+$prefixPathRaw = if ($env:CMAKE_PREFIX_PATH) { $env:CMAKE_PREFIX_PATH } else { $depsPrefix }
+$installFwd = $env:CVC_INSTALL_DIR -replace '\\', '/'
+$srcFwd = "$env:CVC_SOURCE_DIR\sources\pyside6" -replace '\\', '/'
+$buildFwd = $env:CVC_BUILD_DIR -replace '\\', '/'
+$sitePackages = "$installFwd/Lib/site-packages"
+$prefixPathFwd = $prefixPathRaw -replace '\\', '/'
+$pyExeFwd = $pyExe -replace '\\', '/'
+$pyRootFwd = $pyRoot -replace '\\', '/'
 
 # Module subset — ONLY modules the feature-lean cvcpkg qt6 provides
 # (Core, Gui, Widgets, OpenGL, OpenGLWidgets; no Qml/Quick/Sql).
@@ -55,13 +62,13 @@ $pysideModules = "Core;Gui;Widgets;OpenGL;OpenGLWidgets"
 
 $allArgs = @(
     '-G', 'Ninja',
-    '-S', "$env:CVC_SOURCE_DIR\sources\pyside6",
-    '-B', $env:CVC_BUILD_DIR,
-    "-DCMAKE_INSTALL_PREFIX=$env:CVC_INSTALL_DIR",
+    '-S', $srcFwd,
+    '-B', $buildFwd,
+    "-DCMAKE_INSTALL_PREFIX=$installFwd",
     "-DCMAKE_BUILD_TYPE=$cmakeBuildType",
-    "-DCMAKE_PREFIX_PATH=$prefixPath",
-    "-DPython_EXECUTABLE=$pyExe",
-    "-DPython_ROOT_DIR=$pyRoot",
+    "-DCMAKE_PREFIX_PATH=$prefixPathFwd",
+    "-DPython_EXECUTABLE=$pyExeFwd",
+    "-DPython_ROOT_DIR=$pyRootFwd",
     '-DPython_FIND_STRATEGY=LOCATION',
     "-DPYTHON_SITE_PACKAGES=$sitePackages",
     "-DMODULES=$pysideModules",
