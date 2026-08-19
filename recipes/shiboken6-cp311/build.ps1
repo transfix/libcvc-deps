@@ -78,6 +78,13 @@ $allArgs = @(
     '-DBUILD_TESTS=OFF'
 )
 
+# Strip MinGW/MSYS2 from PATH before the MSVC cmake configure. CMake's
+# find_path()/find_library() walk <PATH-entry>\..\include and \..\lib, so
+# C:\msys64\mingw64\bin on the runner's PATH drags MinGW-w64 gcc headers into
+# cl.exe (C2061/C2146 storms). shiboken is find_package-heavy (Clang, Qt6,
+# Python), so guard it the same way env-windows.ps1 / python-wheel.ps1 do.
+$env:PATH = ($env:PATH -split ';' | Where-Object { $_ -notmatch '(?i)\\msys64\\' -and $_ -notmatch '(?i)\\msys32\\' }) -join ';'
+
 & cmake @allArgs
 if ($LASTEXITCODE -ne 0) { throw "shiboken6: cmake configure failed" }
 

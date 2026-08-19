@@ -70,6 +70,11 @@ $allArgs = @(
     '-DBUILD_TESTS=OFF'
 )
 
+# Strip MinGW/MSYS2 from PATH before the MSVC cmake configure (see shiboken6
+# build.ps1) — CMake's find_path/find_library would otherwise pull MinGW-w64 gcc
+# headers into cl.exe. pyside is even more find_package-heavy than shiboken.
+$env:PATH = ($env:PATH -split ';' | Where-Object { $_ -notmatch '(?i)\\msys64\\' -and $_ -notmatch '(?i)\\msys32\\' }) -join ';'
+
 & cmake @allArgs
 if ($LASTEXITCODE -ne 0) { throw "pyside6: cmake configure failed" }
 

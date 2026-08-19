@@ -86,6 +86,7 @@ function Add-CvcPythonToolPaths {
     $pathParts = @()
     $pcParts = @()
     $cmakeParts = @()
+    $mesonPy = $null
     foreach ($p in $prefixes) {
         foreach ($sub in 'Scripts', 'bin') {
             $d = Join-Path $p $sub
@@ -99,7 +100,25 @@ function Add-CvcPythonToolPaths {
             if (Test-Path $sharePc) { $pcParts += $sharePc }
             $cmakeParts += $share
         }
+        # Point meson-python at meson's .py entry point (build-prefix wins).
+        #
+        # cvcpkg's meson package ships lib\meson\meson.py + Scripts\meson.cmd,
+        # but NO meson.exe. meson-python detects meson by running
+        # `subprocess.run(['meson', '--version'])` (shell=False), and on Windows
+        # that goes through CreateProcess, which only auto-resolves .exe and
+        # ignores PATHEXT -- it cannot launch meson.cmd by bare name. So even
+        # with Scripts on PATH, detection fails with
+        #   meson-python: error: meson executable "meson" not found
+        # meson-python honors the MESON env var, and when its value ends in
+        # `.py` it runs it as [sys.executable, meson.py] -- a real interpreter
+        # plus a script, which is both launchable and hermetic (the prefix's
+        # own python). Set it to meson.py rather than relying on a .cmd/.exe.
+        if (-not $mesonPy) {
+            $cand = Join-Path $p 'lib\meson\meson.py'
+            if (Test-Path $cand) { $mesonPy = $cand }
+        }
     }
+    if ($mesonPy -and -not $env:MESON) { $env:MESON = $mesonPy }
 
     if ($pathParts) { $env:PATH = ($pathParts -join ';') + ';' + $env:PATH }
     if ($pcParts) {

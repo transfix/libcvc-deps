@@ -110,6 +110,9 @@ package:
     # Windows layout (globs matching nothing are skipped): DLLs in bin/, import
     # libs in lib/, the importable package under Lib/site-packages/.
     - bin/pyside6*.dll
+    # Defensive: the runtime support DLL may land in lib/ rather than bin/ —
+    # harmless if empty (see shiboken6-cp311).
+    - lib/pyside6*.dll
     - lib/pyside6*.lib
     - Lib/site-packages/PySide6/
   cmake_packages:
