@@ -32,6 +32,37 @@ function Remove-CvcMinGWFromPath {
 
 Remove-CvcMinGWFromPath
 
+# Trim PATH to essentials so vcvarsall/cl invocations don't overflow cmd's limit.
+#
+# setuptools/distutils compile C extensions by RUNNING vcvarsall.bat and
+# capturing its environment (`cmd /u /c "vcvarsall.bat" x86_amd64 && set`). The
+# windows-build runner's PATH is ~7.5 KB (the whole machine PATH dumped into
+# GITHUB_PATH), and cmd has an ~8 KB command-line limit, so vcvarsall's
+# `set PATH=...;%PATH%` overflows — "Error executing cmd ... vcvarsall.bat ...
+# && set" — and the C-extension build fails. (Same root cause python311's build
+# hit; see recipes/python311/build.ps1.) Rebuild a lean PATH from just the tools
+# a python-wheel build needs (system dirs + git/cmake/ninja/pkg-config/nasm/
+# python); vcvarsall then extends it with headroom. Capture tool dirs from the
+# full PATH before trimming. Runs before Add-CvcPythonToolPaths so the prefix's
+# Scripts/bin (short) go back on the now-lean PATH.
+function Compress-CvcPathForMsvc {
+    $keep = @()
+    foreach ($tool in 'git.exe', 'cmake.exe', 'ninja.exe', 'pkg-config.exe', 'nasm.exe', 'python.exe', 'py.exe', 'meson.exe') {
+        $c = Get-Command $tool -ErrorAction SilentlyContinue
+        if ($c) { $keep += (Split-Path $c.Source) }
+    }
+    $base = @(
+        "$env:SystemRoot\System32",
+        "$env:SystemRoot",
+        "$env:SystemRoot\System32\Wbem",
+        "$env:SystemRoot\System32\WindowsPowerShell\v1.0"
+    )
+    $env:PATH = (($base + $keep) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -Unique) -join ';'
+    Write-Output "python-wheel: trimmed PATH to $($env:PATH.Length) chars for MSVC headroom"
+}
+
+Compress-CvcPathForMsvc
+
 # Make the prefixes' console scripts and pkg-config metadata discoverable.
 #
 # A meson/setuptools sdist build finds its tooling by RUNNING it off PATH, not
