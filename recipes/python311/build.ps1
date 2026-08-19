@@ -68,16 +68,35 @@ Get-ChildItem "$vsRoot\VC\Tools\MSVC\*\bin\Host*\x64\ml64.exe" -ErrorAction Sile
     ForEach-Object { Write-Host "     $($_.FullName)" }
 Write-Host "DIAG PATH length: $($env:PATH.Length)"
 
-# Release x64. -e fetches externals; --no-tkinter (no tcl/tk). No --pgo (slow/flaky in CI).
-#
-# /p:PreferredToolArchitecture=x64 is the actual fix: ml64 IS resolvable in the
-# build shell, but MSBuild's C++ CustomBuild resolves tools via $(ExecutablePath)
-# = the HOST toolset bin, not the inherited PATH. cl works either way (MSBuild
-# calls it by absolute path), but _decimal.vcxproj's raw `ml64` custom-build
-# resolves against the host-tool dir MSBuild picked — and on a 64-bit runner the
-# C++ build defaults to the x86-hosted tools (Hostx86\x64). Forcing the x64-hosted
-# toolset points $(ExecutablePath) at Hostx64\x64, where ml64.exe lives.
-& .\PCbuild\build.bat -e -c Release -p x64 --no-tkinter /p:PreferredToolArchitecture=x64
+# Prefer the x64-hosted toolset the SUPPORTED way (env var — MSBuild reads it).
+# A raw /p:PreferredToolArchitecture=x64 arg does NOT survive build.bat's arg
+# parsing: it mangles the MSBuild command line into MSB1008 "Only one project can
+# be specified". Harmless if it isn't the deciding factor.
+$env:PreferredToolArchitecture = 'x64'
+
+# Run build.bat inside a cmd that sourced vcvars64 in the SAME process — the
+# canonical Developer Command Prompt scenario CPython's Windows build is designed
+# for. _decimal's vcdiv64.asm custom-build invokes `ml64` by bare name; MSBuild
+# builds cl/link via absolute toolset paths, but that custom-build resolves ml64
+# off the shell env. Sourcing vcvars directly in the cmd that launches build.bat
+# gives MSBuild (and its custom-build) the assembler env first-hand, rather than
+# relying on pwsh -> build.bat env propagation (which left ml64 resolvable in
+# pwsh yet still invisible to the custom-build). Build the .cmd with explicit
+# CRLF (matches env-windows.ps1; LF-only .cmd files misparse `call`/`if`).
+$src = $env:CVC_SOURCE_DIR
+$buildBat = Join-Path ([System.IO.Path]::GetTempPath()) ("cvc-pybuild-{0}.cmd" -f ([guid]::NewGuid().ToString('N')))
+$batLines = @(
+    '@echo off',
+    "call `"$vcvars`"",
+    'if errorlevel 1 exit /b 1',
+    'echo DIAG-cmd where ml64.exe:',
+    'where ml64.exe',
+    "cd /d `"$src`"",
+    'call .\PCbuild\build.bat -e -c Release -p x64 --no-tkinter',
+    'exit /b %errorlevel%'
+)
+Set-Content -LiteralPath $buildBat -Value ($batLines -join "`r`n") -Encoding Ascii
+try { & cmd.exe /c $buildBat } finally { Remove-Item -LiteralPath $buildBat -ErrorAction SilentlyContinue }
 if ($LASTEXITCODE -ne 0) { throw "PCbuild\build.bat failed (exit $LASTEXITCODE)" }
 
 # Lay out a full install directly into the install dir. --include-dev carries the
