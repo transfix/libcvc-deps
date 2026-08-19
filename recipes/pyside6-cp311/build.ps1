@@ -74,7 +74,13 @@ $allArgs = @(
     "-DMODULES=$pysideModules",
     '-DSTANDALONE=0',
     '-DFORCE_LIMITED_API=yes',
-    '-DBUILD_TESTS=OFF'
+    '-DBUILD_TESTS=OFF',
+    # Skip .pyi type-stub generation. It runs the freshly-built PySide6, whose
+    # __init__._additional_dll_directories demands shiboken6 as a STANDALONE
+    # sibling (ImportError: ...\shiboken6\libshiboken does not exist) — false for
+    # our -DSTANDALONE=0 no-bundle build. Stubs are optional IDE hints; the
+    # compiled bindings are unaffected. (PySideModules.cmake gates on DISABLE_PYI.)
+    '-DDISABLE_PYI=ON'
 )
 
 # Strip MinGW/MSYS2 from PATH before the MSVC cmake configure (see shiboken6
