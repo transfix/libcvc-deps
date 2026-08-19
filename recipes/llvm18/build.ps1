@@ -12,8 +12,6 @@ if (-not (Test-Path $srcLlvm)) {
     throw "LLVM monorepo source not found at $srcLlvm"
 }
 
-$LinkJobs = [Math]::Max(1, [Math]::Min(2, [int]$env:CVC_JOBS))
-
 cmake -G Ninja `
     -S $srcLlvm `
     -B $env:CVC_BUILD_DIR `
@@ -31,7 +29,7 @@ cmake -G Ninja `
     -DLLVM_ENABLE_LIBXML2=OFF `
     -DLLVM_ENABLE_TERMINFO=OFF `
     -DLLVM_ENABLE_BINDINGS=OFF `
-    -DLLVM_PARALLEL_LINK_JOBS=$LinkJobs `
+    -DLLVM_PARALLEL_LINK_JOBS=2 `
     -DCLANG_INCLUDE_DOCS=OFF `
     -DCLANG_INCLUDE_TESTS=OFF `
     -DCLANG_BUILD_TOOLS=ON
