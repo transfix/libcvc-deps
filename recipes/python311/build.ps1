@@ -63,15 +63,21 @@ Write-Host "DIAG Get-Command ml64:  $((Get-Command ml64.exe -ErrorAction Silentl
 Write-Host "DIAG Get-Command cl:    $((Get-Command cl.exe   -ErrorAction SilentlyContinue).Source)"
 Write-Host "DIAG where.exe ml64.exe:"
 & where.exe ml64.exe 2>&1 | ForEach-Object { Write-Host "     $_" }
-Write-Host "DIAG PATH entries with HostX:"
-($env:PATH -split ';' | Where-Object { $_ -match 'HostX' }) | ForEach-Object { Write-Host "     $_" }
+Write-Host "DIAG ml64.exe locations under the toolset (which host bins have it?):"
+Get-ChildItem "$vsRoot\VC\Tools\MSVC\*\bin\Host*\x64\ml64.exe" -ErrorAction SilentlyContinue |
+    ForEach-Object { Write-Host "     $($_.FullName)" }
 Write-Host "DIAG PATH length: $($env:PATH.Length)"
-if (-not (Get-Command ml64.exe -ErrorAction SilentlyContinue)) {
-    throw "ml64.exe not resolvable in this session even after sourcing vcvars64 — _decimal will fail"
-}
 
 # Release x64. -e fetches externals; --no-tkinter (no tcl/tk). No --pgo (slow/flaky in CI).
-& .\PCbuild\build.bat -e -c Release -p x64 --no-tkinter
+#
+# /p:PreferredToolArchitecture=x64 is the actual fix: ml64 IS resolvable in the
+# build shell, but MSBuild's C++ CustomBuild resolves tools via $(ExecutablePath)
+# = the HOST toolset bin, not the inherited PATH. cl works either way (MSBuild
+# calls it by absolute path), but _decimal.vcxproj's raw `ml64` custom-build
+# resolves against the host-tool dir MSBuild picked — and on a 64-bit runner the
+# C++ build defaults to the x86-hosted tools (Hostx86\x64). Forcing the x64-hosted
+# toolset points $(ExecutablePath) at Hostx64\x64, where ml64.exe lives.
+& .\PCbuild\build.bat -e -c Release -p x64 --no-tkinter /p:PreferredToolArchitecture=x64
 if ($LASTEXITCODE -ne 0) { throw "PCbuild\build.bat failed (exit $LASTEXITCODE)" }
 
 # Lay out a full install directly into the install dir. --include-dev carries the
