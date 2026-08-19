@@ -18,6 +18,15 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\..\_common\python-wheel.ps1"   # also scrubs MinGW from PATH
 
+# numpy ships its OWN vendored meson (vendored-meson/meson/meson.py) and pins it
+# in pyproject.toml ([tool.meson-python] meson = 'vendored-meson/meson/meson.py')
+# because meson_cpu's SIMD dispatch uses numpy's custom `features` meson module
+# that stock meson lacks — otherwise: meson_cpu/x86/meson.build ERROR: Module
+# "features" does not exist. python-wheel.ps1 sets $env:MESON (so meson-backed
+# wheels can find cvcpkg's meson), but that env var OVERRIDES numpy's pyproject
+# pin. Clear it here so meson-python honors numpy's vendored meson.
+Remove-Item Env:\MESON -ErrorAction SilentlyContinue
+
 $py = Get-CvcPythonExe
 $deps = if ($env:CVC_DEPS_PREFIX) { $env:CVC_DEPS_PREFIX } else { $env:CVC_INSTALL_DIR }
 $bld = if ($env:CVC_BUILD_PREFIX) { $env:CVC_BUILD_PREFIX } else { $deps }
