@@ -14,35 +14,63 @@ $SCRIPT_DIR = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 Set-Location $env:CVC_SOURCE_DIR
 
-# Put the MSVC x64 tool directory on PATH for THIS process before building.
-# build.bat drives cl/link through MSBuild's toolset resolution (absolute paths),
-# so those compile fine without any PATH setup — but _decimal.vcxproj assembles
-# libmpdec\vcdiv64.asm with a raw <CustomBuild> that calls `ml64` (the MASM
-# assembler) by BARE NAME, which resolves only off the process PATH. build.bat
-# never sources vcvars, and the workflow's step-level PATH accumulation can bury
-# or truncate the msvc-dev-cmd entries, so ml64 goes missing and the build dies
-# with MSB8066 (exit 9009, "'ml64' is not recognized"). ml64.exe lives in the
-# same HostX64\x64 dir as cl/link/lib, so prepending that one directory is a
-# deterministic fix with none of the quoting pitfalls of importing all of vcvars.
-$vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
-if (-not (Test-Path $vswhere)) {
-    $vswhere = Join-Path $env:ProgramFiles "Microsoft Visual Studio\Installer\vswhere.exe"
-}
-$vsPath = & $vswhere -latest -products '*' `
+# ── Guarantee the MSVC x64 assembler (ml64.exe) for the _decimal build ──────
+# _decimal.vcxproj assembles libmpdec\vcdiv64.asm with a raw <CustomBuild> that
+# calls `ml64` by BARE NAME. MSBuild builds cl/link via absolute toolset paths
+# (so they work regardless of PATH), but that custom-build resolves ml64 only
+# off the environment PATH of the cmd MSBuild spawns. build.bat never sources
+# vcvars, and env-windows.ps1's Import-CvcMsvcEnv early-returns when cl is
+# already present (true on CI via msvc-dev-cmd) — so ml64 was left unguaranteed
+# and the build died with MSB8066 (exit 9009, "'ml64' is not recognized").
+#
+# Source the FULL vcvars64 developer environment into THIS process — the exact
+# env a Developer Command Prompt provides, which build.bat -> MSBuild -> the
+# custom build all inherit. Uses env-windows.ps1's robust temp-.cmd import
+# technique (avoids the fragile inline `cmd /c "..."` quoting).
+$vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+if (-not (Test-Path $vswhere)) { $vswhere = Join-Path $env:ProgramFiles 'Microsoft Visual Studio\Installer\vswhere.exe' }
+$vsRoot = & $vswhere -latest -products '*' `
     -requires 'Microsoft.VisualStudio.Component.VC.Tools.x86.x64' `
     -property installationPath 2>$null | Select-Object -First 1
-if (-not $vsPath) { throw "vswhere could not locate a VS install with the x64 VC tools" }
-# Newest installed MSVC toolset — the one MSBuild's default v143 toolset resolves
-# to (matches what the compilers use), so ml64 stays in lockstep with cl/link.
-$ml64 = Get-ChildItem "$vsPath\VC\Tools\MSVC\*\bin\HostX64\x64\ml64.exe" -ErrorAction SilentlyContinue |
+if (-not $vsRoot) { throw 'vswhere found no VS install with the x64 VC tools' }
+$vcvars = Join-Path $vsRoot 'VC\Auxiliary\Build\vcvars64.bat'
+if (-not (Test-Path $vcvars)) { throw "vcvars64.bat not found under $vsRoot" }
+$helper = Join-Path ([System.IO.Path]::GetTempPath()) ("cvc-vcvars-{0}.cmd" -f ([guid]::NewGuid().ToString('N')))
+Set-Content -LiteralPath $helper -Value "@echo off`r`ncall `"$vcvars`" >nul 2>&1`r`nset`r`n" -Encoding Ascii
+try { $dump = & cmd.exe /c $helper } finally { Remove-Item -LiteralPath $helper -ErrorAction SilentlyContinue }
+foreach ($line in $dump) {
+    if ($line -match '^([^=]+)=(.*)$') {
+        $n = $matches[1]; $v = $matches[2]
+        if ($n -in @('_', 'PROMPT')) { continue }
+        [Environment]::SetEnvironmentVariable($n, $v, 'Process')
+    }
+}
+# Belt-and-suspenders: also prepend the toolset bin (holds ml64.exe next to cl).
+$ml64 = Get-ChildItem "$vsRoot\VC\Tools\MSVC\*\bin\HostX64\x64\ml64.exe" -ErrorAction SilentlyContinue |
     Sort-Object FullName | Select-Object -Last 1
-if (-not $ml64) { throw "ml64.exe not found under $vsPath\VC\Tools\MSVC" }
-Write-Host "Prepending MSVC x64 tools to PATH: $($ml64.DirectoryName)"
-$env:PATH = "$($ml64.DirectoryName);$env:PATH"
+if ($ml64) { $env:PATH = "$($ml64.DirectoryName);$env:PATH" }
 
-# Release x64. -e fetches externals; --no-tkinter (no tcl/tk here). No --pgo: the
-# profile-guided build reruns the test suite and is slow + flaky in CI; a plain
-# release build is what we ship.
+# Force fresh MSBuild worker nodes that inherit THIS environment (not a reused
+# node from an earlier invocation with a stale PATH).
+$env:MSBUILDDISABLENODEREUSE = '1'
+
+# ── Diagnostics: prove whether the assembler is resolvable before building ──
+# where.exe searches PATH exactly like the cmd MSBuild spawns for the custom
+# build, so this tells us if the problem is PATH (fix works) or a sandboxed
+# custom-build env (needs a different fix).
+Write-Host "DIAG vcvars64:          $vcvars"
+Write-Host "DIAG Get-Command ml64:  $((Get-Command ml64.exe -ErrorAction SilentlyContinue).Source)"
+Write-Host "DIAG Get-Command cl:    $((Get-Command cl.exe   -ErrorAction SilentlyContinue).Source)"
+Write-Host "DIAG where.exe ml64.exe:"
+& where.exe ml64.exe 2>&1 | ForEach-Object { Write-Host "     $_" }
+Write-Host "DIAG PATH entries with HostX:"
+($env:PATH -split ';' | Where-Object { $_ -match 'HostX' }) | ForEach-Object { Write-Host "     $_" }
+Write-Host "DIAG PATH length: $($env:PATH.Length)"
+if (-not (Get-Command ml64.exe -ErrorAction SilentlyContinue)) {
+    throw "ml64.exe not resolvable in this session even after sourcing vcvars64 — _decimal will fail"
+}
+
+# Release x64. -e fetches externals; --no-tkinter (no tcl/tk). No --pgo (slow/flaky in CI).
 & .\PCbuild\build.bat -e -c Release -p x64 --no-tkinter
 if ($LASTEXITCODE -ne 0) { throw "PCbuild\build.bat failed (exit $LASTEXITCODE)" }
 
