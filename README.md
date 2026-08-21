@@ -25,7 +25,7 @@ cacheable, and version-locked — you only pull what you need.
 pipx install cvcpkg
 
 # Or install from source:
-pip install -e '.[progress]'
+pip install -e .
 
 # List available components:
 cvcpkg list --available
@@ -1904,7 +1904,7 @@ concentrated in a short time window.
 
 ```bash
 # from the repo root
-pip install -e '.[progress,server]'
+pip install -e '.[server]'
 pytest
 ```
 

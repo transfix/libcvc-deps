@@ -77,6 +77,14 @@ Two rules shape the output:
 - **Anything the project did not state is written as a `TODO`**, so guesses
   surface in review instead of silently shipping a wrong value.
 
+Everything that resolves is filed under `depends.build`, with `runtime` left
+empty — review that split before publishing: a library the project links
+against belongs in `depends.runtime` or it will not ship (see
+[key fields](#key-fields)). Note also that a generated Python recipe builds
+the project tree with `pip install . --no-deps`; a package headed for the
+shared per-interpreter `-cpXXX` matrix uses the `python_wheel` /
+`python_sdist` model from [python-wheels.md](python-wheels.md) instead.
+
 | Flag | Meaning |
 |------|---------|
 | `--build-system {auto,cmake,autotools,meson,make,python}` | Override detection (default `auto`). |
@@ -86,6 +94,10 @@ Two rules shape the output:
 | `--no-default-recipes` | Do not consult the default recipe set when resolving dependencies. |
 | `--dry-run` | Print the recipe instead of writing it. |
 | `--force` | Overwrite an existing recipe directory. |
+
+If no build system can be detected, the command fails and names the marker
+files it looked for — pass `--build-system` to force one, or fall back to
+`cvcpkg init` for a blank scaffold.
 
 ## `recipe.yaml` structure
 
