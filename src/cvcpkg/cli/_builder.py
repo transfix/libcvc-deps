@@ -22,7 +22,6 @@ from cvcpkg.heartbeat import unwatch as heartbeat_unwatch
 from cvcpkg.heartbeat import watch as heartbeat_watch
 from cvcpkg.semver import version_sort_key
 
-
 # Written last, inside a fully extracted cross-toolchain cache entry.  Its
 # presence -- not "the directory exists and is non-empty" -- is what makes a
 # cached toolchain usable, so concurrent jobs cannot pick up a partial tree.
@@ -41,6 +40,29 @@ def _toolchain_cache_ready(tc_cache_path: Path) -> bool:
     because emsdk.py has not been extracted yet.
     """
     return (tc_cache_path / _TC_CACHE_MARKER).is_file()
+
+
+def _publish_toolchain_cache(staging: Path, cache_path: Path, stamp: str) -> None:
+    """Publish a fully extracted *staging* tree as the cache entry *cache_path*.
+
+    The marker is written last and the tree is moved with a single rename, so
+    a concurrent job polling ``_toolchain_cache_ready`` observes the entry as
+    either absent or complete -- never mid-extraction.  Losing a publish race
+    is not an error: the winner's tree has identical content, so ours is
+    simply discarded.
+    """
+    import shutil
+
+    (staging / _TC_CACHE_MARKER).write_text(f"{stamp}\n")
+    # A marker-less directory here is debris from an older cvcpkg or a crashed
+    # run; nothing publishes into cache_path except this rename, so replacing
+    # it cannot pull a tree out from under a concurrent job.
+    if cache_path.exists() and not _toolchain_cache_ready(cache_path):
+        shutil.rmtree(cache_path, ignore_errors=True)
+    try:
+        staging.rename(cache_path)
+    except OSError:
+        shutil.rmtree(staging, ignore_errors=True)
 
 
 def _symlink_merge_into(src_root: Path, dst_root: Path) -> None:
@@ -1403,21 +1425,8 @@ def builder_run(
                 finally:
                     tmp_archive.unlink(missing_ok=True)
 
-                # Publish the staged toolchain: marker last, then a single
-                # atomic rename, so the cache is either absent or complete.
                 if tc_staging is not None and tc_cache_path is not None:
-                    (tc_staging / _TC_CACHE_MARKER).write_text(f"{tc_name} {tc_version}\n")
-                    # A marker-less directory here is debris from an older
-                    # cvcpkg (or a crashed run); nothing publishes into
-                    # tc_cache_path except this rename, so it is safe to drop.
-                    if tc_cache_path.exists() and not _toolchain_cache_ready(tc_cache_path):
-                        shutil.rmtree(tc_cache_path, ignore_errors=True)
-                    try:
-                        tc_staging.rename(tc_cache_path)
-                    except OSError:
-                        # Another job published the same toolchain first --
-                        # keep theirs (identical content) and drop ours.
-                        shutil.rmtree(tc_staging, ignore_errors=True)
+                    _publish_toolchain_cache(tc_staging, tc_cache_path, f"{tc_name} {tc_version}")
                     extract_target = tc_cache_path
 
             # If we extracted into the cache, merge into prefix now
