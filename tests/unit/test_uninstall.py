@@ -193,6 +193,26 @@ class TestUninstallCommand:
         out = capsys.readouterr().out
         assert "[dependent]" in out
 
+    def test_cascade_removes_dependents_never_dependencies(self, tmp_path, cache_dir, capsys):
+        """--cascade follows the graph UP (things that would break), not down.
+        A target's own dependencies stay: other things may use them, and
+        "uninstall X" must never quietly strip X's substrate."""
+        prefix = tmp_path / "prefix"
+        base = _make_bundle(cache_dir, "base", {"lib/libbase.so": "elf"})
+        mid = _make_bundle(cache_dir, "mid", {"lib/libmid.so": "elf"}, deps=("base",))
+        top = _make_bundle(cache_dir, "top", {"bin/top": "#!"}, deps=("mid",))
+        _install_bundles(prefix, [base, mid, top])
+
+        ret = main(["uninstall", "mid", "--cascade", "--prefix", str(prefix)])
+
+        assert ret == 0
+        # mid and its dependent top are gone
+        assert not (prefix / "lib" / "libmid.so").exists()
+        assert not (prefix / "bin").exists()
+        # mid's dependency base is untouched
+        assert (prefix / "lib" / "libbase.so").exists()
+        assert [b.name for b in _read_lock(prefix).bundles] == ["base"]
+
     def test_dependents_via_provides_slot(self, tmp_path, cache_dir, capsys):
         """A dep on a virtual name must reach the installed provider."""
         prefix = tmp_path / "prefix"
