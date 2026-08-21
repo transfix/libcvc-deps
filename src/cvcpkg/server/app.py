@@ -342,9 +342,11 @@ REGISTRATION_MODE = RegistrationMode(os.environ.get("CVCPKG_REGISTRATION_MODE", 
 # REQUIRE_AUTH_READS) enables the gate.  The CLI/docker path only ever sets
 # this env var — it never calls create_app() directly — so create_app() must
 # read it back rather than rely solely on its require_auth_for_reads param.
-REQUIRE_AUTH_FOR_READS = os.environ.get(
-    "CVCPKG_SERVER_REQUIRE_AUTH_READS", ""
-).lower() in ("1", "true", "yes")
+REQUIRE_AUTH_FOR_READS = os.environ.get("CVCPKG_SERVER_REQUIRE_AUTH_READS", "").lower() in (
+    "1",
+    "true",
+    "yes",
+)
 
 logger = logging.getLogger("cvcpkg.server")
 
