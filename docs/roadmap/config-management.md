@@ -10,9 +10,12 @@ Status: **Not started** (planned; required before the PyPI release).
 too — this document is the full design it points at.
 
 This phase depends on the per-prefix state database
-(`share/cvcpkg/prefix.db`) and the first-class `uninstall` command from the
+(`share/cvcpkg/prefix.db`) and a DB-backed `uninstall` command from the
 CLI UX phase — see [cli-ux-recipe-first.md](cli-ux-recipe-first.md).
-Neither exists yet (see [Prerequisites](#prerequisites--what-exists-today)).
+`prefix.db` does not exist yet; `cvcpkg uninstall` shipped ahead of it
+(#522) as an archive-derived command, which is enough to build on but not
+the DB-backed version this phase's state teardown needs (see
+[Prerequisites](#prerequisites--what-exists-today)).
 
 ---
 
@@ -376,11 +379,13 @@ Verified against the code as of the docs consolidation (2026-08):
 
 **Not yet built:**
 
-- **No `cvcpkg uninstall` command.** No `check` or `apply` either; the
-  closest existing command is `cvcpkg verify`, which checks prefix
-  integrity against the lockfile, not per-resource state. (An
-  install-conflict error message already points users at
-  `cvcpkg uninstall` — the command it names does not exist yet.)
+- **`cvcpkg uninstall` exists (#522) but not as this phase needs it.** It
+  removes files derived from the bundle archive the lockfile names, with
+  `--cascade`/`--dry-run` and dependent-aware refusal — but there is no
+  `check` or `apply`, no state-resource concept for it to tear down, no
+  teardown hook, and no drift detection on modified files (the closest
+  thing today, `cvcpkg verify`, checks prefix integrity against the
+  lockfile, not per-resource state). Those all wait on `prefix.db`.
 - **No per-prefix state database** — nothing like `prefix.db`/`local.db`
   exists in the client; installed-file tracking, the ops journal, and
   generations all land with the CLI UX phase

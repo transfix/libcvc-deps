@@ -535,8 +535,12 @@ Shipped since the old snapshot: `cvcpkg generate` (build-system detection/
 import), grouped `--help`, and server-side recipe browsing (#503); the build
 default flipped to `--no-deps` with a CWD `./recipes` auto-overlay and
 `--incremental` (#401); `install-deps` (#348) provides the prebuilt-deps
-path; `world` is legacy. The two structural pillars — the `~/.cvcpkg/` home
-and the prefix databases — have zero code.
+path; `world` is legacy; and `cvcpkg uninstall` (#522) — the install-conflict
+error had pointed at this command since before it existed. It ships ahead of
+`prefix.db`, deriving each package's owned-file set from its cached bundle
+archive rather than a DB (`--cascade` and `--dry-run`; refuses on
+source-built entries, since there is no archive to enumerate). The `~/.cvcpkg/`
+home and the prefix databases are otherwise unbuilt.
 
 - [ ] Deprecation warning on `cvcpkg install --from cvc-requirements.yaml`;
       lead the README quick start with the recipe-first flow
@@ -562,10 +566,10 @@ and the prefix databases — have zero code.
       modify, path-or-alias everywhere, stale-entry repair, registry-powered
       gc (gc currently prunes against an empty set)
 - [ ] Per-prefix `prefix.db`: installed-file tracking (sha256/mode/owner),
-      `cvcpkg owns`, a real `cvcpkg uninstall` (`--cascade`, teardown hook),
-      idempotent installs, a `verify` that actually hashes files,
-      corpse-free upgrades, an append-only operations journal (note: the
-      install-conflict error already points at the nonexistent `uninstall`)
+      `cvcpkg owns`, migrating `cvcpkg uninstall` from archive-derived to
+      DB-backed (adds a teardown hook and drift detection on modified
+      files), idempotent installs, a `verify` that actually hashes files,
+      corpse-free upgrades, an append-only operations journal
 - [ ] Terminal UX: real progress bars/spinners for downloads/installs (wire
       up or drop the dead `[progress]` tqdm extra); colorized status
       summaries
@@ -780,8 +784,9 @@ signed-bundle file lists). Condensed deliverables:
       non-revertible labeling
 - [ ] CLI: `cvcpkg check` (machine-readable audit) and `cvcpkg apply`;
       explicitly no daemon/pull server
-- [ ] Prerequisite from Phase 15: a real `cvcpkg uninstall` + the per-prefix
-      state database
+- [ ] Prerequisite from Phase 15: the per-prefix state database
+      (`cvcpkg uninstall` itself shipped in #522, archive-derived; state
+      teardown needs the DB-backed version)
 - [ ] Windows: delegate state resources to the DSC v3 executable+manifest
       protocol; drift correction touches only declared fields
 - [ ] BYO: `source.type: byo` + a `restrict: [fetch, mirror]` axis;

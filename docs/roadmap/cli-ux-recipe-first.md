@@ -70,12 +70,21 @@ Detail:
 - **`world` is marked legacy** (#503) — its help text now steers to the
   recipe-first loop (`install-deps` + `build`), and `add`/`remove` sit under
   a "Requirements files (legacy)" help section.
+- **`cvcpkg uninstall`** (#522) — the install-conflict error in
+  `cli/_install.py` had told users to run this command since before it
+  existed; it now does, ahead of `prefix.db`. It derives each package's
+  owned-file set from the bundle archive the lockfile names (the archive
+  member list is exactly what extraction materialized), supports `--cascade`
+  (removes the dependent closure, refusing by default when dependents
+  exist) and `--dry-run`, and refuses on source-built entries — there is no
+  archive to enumerate their files from. See "Per-prefix state database"
+  below for what the archive-derived approach cannot do yet (post-install
+  file writes, modified-file drift, a teardown hook) and what `prefix.db`
+  fixes.
 
-The rest of the phase is unimplemented. In particular there is still no
-`cvcpkg uninstall` (the install-conflict error in `cli/_install.py` tells
-users to run one), `cvcpkg verify` hashes no files, `cvcpkg gc` prunes
-against an empty referenced set, and there is no `cvcpkg config` command or
-settings write path.
+The rest of the phase is unimplemented. In particular `cvcpkg verify` hashes
+no files, `cvcpkg gc` prunes against an empty referenced set, and there is no
+`cvcpkg config` command or settings write path.
 
 ---
 
@@ -182,12 +191,10 @@ server). Everything should live behind the single `cvcpkg` binary.
 cvcpkg currently has **no machine-level record of the prefixes it has
 installed**: every command takes `--prefix <path>` (default `./deps`) and
 all state lives inside each prefix tree
-(`share/libcvc-deps/lockfile.yaml` + per-bundle manifests). The gap has
-real consequences — `cvcpkg gc` documents pruning archives "no longer
+(`share/libcvc-deps/lockfile.yaml` + per-bundle manifests). The gap has a
+real consequence — `cvcpkg gc` documents pruning archives "no longer
 referenced by any installed prefix" but cannot enumerate prefixes, so it
-passes an **empty referenced set** to the cache GC; and the
-install-conflict error message already points users at a
-`cvcpkg uninstall` that does not exist yet.
+passes an **empty referenced set** to the cache GC.
 
 - **Track install prefixes in a local database** — an sqlite database file
   (by default `~/.cvcpkg/local.db`) that maps install prefix names to
@@ -224,9 +231,11 @@ install-conflict error message already points users at a
 
 Four primitives that are **first-class functionality, not nice-to-haves**
 (directive 2026-07-18): today extraction is a blind merge into the prefix
-tree, there is no `cvcpkg uninstall`, recipes have no teardown slot, and
-re-install always re-extracts. Note this is not starting from zero: each
-bundle already ships a real per-package file list — `generate_manifest()`
+tree, recipes have no teardown slot, and re-install always re-extracts.
+`cvcpkg uninstall` now exists (#522), but as an archive-derived command
+rather than a DB-backed one — see below. Note the DB work is not starting
+from zero either: each bundle already ships a real per-package file list —
+`generate_manifest()`
 walks the actually-staged install tree and writes it into
 `share/libcvc-deps/<name>/manifest.yaml` (`file_conflicts.py` already
 computes cross-package overlaps from exactly these lists). What is missing
@@ -243,13 +252,18 @@ the prefix**.
   where two packages' manifests overlap, which package's copy actually won
   on disk. Enables `cvcpkg owns <file>`, real file-conflict detection, and
   hash-level verification.
-- **First-class `cvcpkg uninstall <pkg> --prefix/-alias`.** Remove exactly
-  the files the package owns, prune emptied directories, update lockfile +
-  DB atomically (SQLite transaction), and handle dependents deliberately:
-  refuse by default when other installed packages depend on the target,
-  `--cascade` to remove the dependent closure (the resolver already knows
-  the runtime graph). Runs the recipe's teardown hook when one is declared
-  (the state contract in the configuration-management phase).
+- **Migrate `cvcpkg uninstall` from archive-derived to DB-backed.** The
+  shipped command (#522) already removes exactly the files a package's
+  bundle archive lists, prunes emptied directories, and handles dependents
+  deliberately (refuse by default when other installed packages depend on
+  the target, `--cascade` to remove the dependent closure — the resolver
+  already knows the runtime graph). What the DB adds: atomic lockfile+DB
+  updates (a SQLite transaction, vs. today's plain lockfile rewrite that can
+  go stale if interrupted), support for source-built entries (today refused
+  outright — no archive to enumerate), drift-aware removal of files modified
+  since install (today deleted blind), and running the recipe's teardown
+  hook when one is declared (the state contract in the
+  configuration-management phase).
 - **Idempotent installs.** Installing a variant already recorded in
   `prefix.db` that passes verification is a **no-op** (today install
   unconditionally re-extracts over the tree; only the download itself is
