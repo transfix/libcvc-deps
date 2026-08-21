@@ -90,14 +90,18 @@ def uninstall(components: tuple[str, ...], prefix: str, cascade: bool, dry_run: 
 
     # A bystander with unknown deps could invisibly depend on a target; warn
     # rather than refuse -- the archive may simply have been evicted, and
-    # refusing would make such prefixes permanently un-uninstallable.
-    for name, pkg in sorted(packages.items()):
-        if not pkg.deps_known and name not in targets:
-            click.echo(
-                f"cvcpkg: warning -- cannot determine dependencies of {name!r} "
-                "(no cached archive, no local recipe); treating it as independent.",
-                err=True,
-            )
+    # refusing would make such prefixes permanently un-uninstallable.  One
+    # summary line, not one per package: a prefix that has been around a while
+    # can easily have a dozen bundles aged out of the cache.
+    unknown = [n for n, p in sorted(packages.items()) if not p.deps_known and n not in targets]
+    if unknown:
+        click.echo(
+            f"cvcpkg: warning -- cannot determine the dependencies of "
+            f"{len(unknown)} installed package(s), so they are treated as "
+            f"depending on nothing (no cached archive and no local recipe): "
+            f"{', '.join(unknown)}",
+            err=True,
+        )
 
     closure = dependent_closure(set(targets), packages)
     dependents = sorted(closure - set(targets))

@@ -273,6 +273,33 @@ class TestUninstallCommand:
         assert not (prefix / "bin" / "alpha").exists()
         assert "fetching archive" in capsys.readouterr().out
 
+    def test_uncached_bystanders_warn_once_not_per_package(self, tmp_path, cache_dir, capsys):
+        """A long-lived prefix can have many bundles aged out of the cache;
+        their unknown deps are one summary line, not N lines."""
+        prefix = tmp_path / "prefix"
+        alpha = _make_bundle(cache_dir, "alpha", {"bin/alpha": "#!"})
+        strangers = [
+            LockEntry(
+                name=f"stranger{i}",
+                version="1.0.0+cvc.1",
+                sha256="0" * 64,  # nothing at this hash in the cache
+                archive_url=f"https://example.invalid/download/stranger{i}.tar.gz",
+            )
+            for i in range(3)
+        ]
+        _install_bundles(prefix, [alpha])
+        lock = _read_lock(prefix)
+        lock.bundles.extend(strangers)
+        lock.write(prefix / "share" / "libcvc-deps" / "lockfile.yaml")
+
+        ret = main(["uninstall", "alpha", "--prefix", str(prefix)])
+
+        assert ret == 0
+        err = capsys.readouterr().err
+        assert err.count("cannot determine the dependencies") == 1
+        for s in strangers:
+            assert s.name in err
+
     def test_help_is_registered(self):
         try:
             ret = main(["uninstall", "--help"])
@@ -385,7 +412,7 @@ class TestUninstallerHelpers:
 
     def test_unsafe_archive_member_rejected(self, tmp_path):
         from cvcpkg.errors import InstallError
-        from cvcpkg.uninstaller import list_archive_files
+        from cvcpkg.uninstaller import read_archive
 
         evil = tmp_path / "evil.tar.gz"
         with tarfile.open(evil, "w:gz") as tf:
@@ -394,7 +421,48 @@ class TestUninstallerHelpers:
             info.size = len(data)
             tf.addfile(info, io.BytesIO(data))
         with pytest.raises(InstallError):
-            list_archive_files(evil)
+            read_archive(evil)
+
+    def test_read_archive_returns_files_and_manifest_in_one_open(self, tmp_path, cache_dir):
+        """Files and manifest come from a single pass.  A second pass would
+        re-decompress every bundle in the prefix (the manifest sorts last in
+        the tar), which is painful for Qt6/VTK-sized archives."""
+        from cvcpkg import uninstaller
+
+        _entry, archive = _make_bundle(
+            cache_dir, "alpha", {"bin/alpha": "#!", "lib/liba.so": "elf"}, deps=("zlib",)
+        )
+        opens = 0
+        real_open = uninstaller.tarfile.open
+
+        def counting_open(*args, **kwargs):
+            nonlocal opens
+            opens += 1
+            return real_open(*args, **kwargs)
+
+        with mock.patch.object(uninstaller.tarfile, "open", counting_open):
+            files, manifest = uninstaller.read_archive(archive)
+
+        assert opens == 1
+        assert "bin/alpha" in files
+        assert "lib/liba.so" in files
+        assert manifest is not None
+        assert manifest["bundle"]["name"] == "alpha"
+
+    def test_read_archive_tolerates_a_missing_manifest(self, tmp_path):
+        from cvcpkg.uninstaller import read_archive
+
+        plain = tmp_path / "plain.tar.gz"
+        with tarfile.open(plain, "w:gz") as tf:
+            data = b"x"
+            info = tarfile.TarInfo("bin/thing")
+            info.size = len(data)
+            tf.addfile(info, io.BytesIO(data))
+
+        files, manifest = read_archive(plain)
+
+        assert files == ["bin/thing"]
+        assert manifest is None
 
     def test_execute_removal_counts_and_prunes(self, tmp_path):
         from cvcpkg.uninstaller import execute_removal

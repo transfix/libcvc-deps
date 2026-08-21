@@ -95,59 +95,62 @@ def _validated(member: str) -> str | None:
     return name
 
 
-def list_archive_files(archive: Path) -> list[str]:
-    """Return the file/symlink member paths of a bundle archive.
+def read_archive(archive: Path) -> tuple[list[str], dict | None]:
+    """Return ``(member paths, embedded manifest)`` from ONE pass over *archive*.
 
-    Directories are omitted: removal deletes files and then prunes emptied
-    directories, so directory members carry no information.
+    Both are read together on purpose.  A ``.tar.gz``/``.tar.zst`` has to be
+    decompressed from the start to reach any member, and the manifest sorts
+    near the end of the tar (``share/`` follows ``bin/``, ``include/``,
+    ``lib/``), so a separate manifest read costs a second full decompression
+    of every bundle in the prefix — Qt6 and VTK make that very visible.
+
+    Directory members are omitted: removal deletes files and then prunes
+    emptied directories, so they carry no information.
     """
     name = archive.name.lower()
     if name.endswith(".7z"):
         raise InstallError(
             f"cannot list files in {archive.name}: .7z archives are not supported for uninstall"
         )
+    target = META_PREFIX + "manifest.yaml"
     files: list[str] = []
+    manifest: dict | None = None
+
     if name.endswith(".zip"):
         with zipfile.ZipFile(archive) as zf:
             for info in zf.infolist():
                 if info.is_dir():
                     continue
                 p = _validated(info.filename)
-                if p:
-                    files.append(p)
-        return files
-    with tarfile.open(archive, mode="r:*") as tf:
-        for member in tf.getmembers():
+                if not p:
+                    continue
+                files.append(p)
+                if p == target and manifest is None:
+                    manifest = _safe_yaml(zf.read(info))
+        return files, manifest
+
+    with tarfile.open(archive, mode="r|*") as tf:  # streaming: no seeking back
+        for member in tf:
             if not (member.isreg() or member.issym() or member.islnk()):
                 continue
             p = _validated(member.name)
-            if p:
-                files.append(p)
-    return files
+            if not p:
+                continue
+            files.append(p)
+            if p == target and manifest is None and member.isreg():
+                f = tf.extractfile(member)
+                if f is not None:
+                    manifest = _safe_yaml(f.read())
+    return files, manifest
 
 
-def read_embedded_manifest(archive: Path) -> dict | None:
-    """Return the bundle's embedded manifest.yaml as a dict, or None."""
-    target = META_PREFIX + "manifest.yaml"
+def _safe_yaml(raw: bytes) -> dict | None:
+    """Parse a manifest blob, treating anything unexpected as absent."""
     try:
-        if archive.name.lower().endswith(".zip"):
-            with zipfile.ZipFile(archive) as zf:
-                for entry in zf.namelist():
-                    if _validated(entry) == target:
-                        data = yaml.safe_load(zf.read(entry))
-                        return data if isinstance(data, dict) else None
-        else:
-            with tarfile.open(archive, mode="r:*") as tf:
-                for member in tf.getmembers():
-                    if _validated(member.name) == target:
-                        f = tf.extractfile(member)
-                        if f is None:
-                            return None
-                        data = yaml.safe_load(f.read())
-                        return data if isinstance(data, dict) else None
-    except (tarfile.TarError, zipfile.BadZipFile, yaml.YAMLError):
+        data = yaml.safe_load(raw)
+    except yaml.YAMLError:
         return None
-    return None
+    return data if isinstance(data, dict) else None
 
 
 def _manifest_deps_provides(manifest: dict) -> tuple[list[str], list[str]]:
@@ -212,8 +215,7 @@ def load_installed(
             p = cache_mod.cache_path(cache_dir, entry.sha256, archive_filename(entry))
             if p.is_file():
                 pkg.archive = p
-                pkg.files = list_archive_files(p)
-                manifest = read_embedded_manifest(p)
+                pkg.files, manifest = read_archive(p)
                 if manifest is not None:
                     pkg.deps, pkg.provides = _manifest_deps_provides(manifest)
                 else:
@@ -260,8 +262,7 @@ def fetch_removal_archive(pkg: InstalledPackage, lock: Lockfile, cache_dir: Path
         source_release=entry.source_release,
     )
     pkg.archive = download_bundle(cat_entry, cache_dir)
-    pkg.files = list_archive_files(pkg.archive)
-    manifest = read_embedded_manifest(pkg.archive)
+    pkg.files, manifest = read_archive(pkg.archive)
     if manifest is not None:
         pkg.deps, pkg.provides = _manifest_deps_provides(manifest)
         pkg.deps_known = True
