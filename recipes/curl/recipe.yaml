@@ -29,7 +29,19 @@ recipe:
   # already-linked artifact and never touches libtool's argument handling.
   # Added patchelf as an OpenBSD-only build dependency (already has an
   # OpenBSD recipe in this tree).
-  cvc_revision: 4
+  #
+  # Bumped 4 -> 5: +cvc.4 failed on linux, freebsd, openbsd, AND netbsd
+  # simultaneously in the same run, each with a different symptom right
+  # after "CCLD libcurlu.la" / "CCLD libcurl.la" ("cannot find libcurl.so.4"
+  # on linux/freebsd; "unknown directive: curl_easy_cleanup" reading
+  # .libs/libcurl.exp on openbsd's lld). Since this hit every platform at
+  # once and none of v4's changes (the patchelf post-install step, the
+  # OpenBSD-only build dep) touch anything before `make install` even
+  # starts, this isn't platform-specific at all: it's a parallel-make race
+  # between curl's two sibling libtool targets, libcurl.la (installed,
+  # shared) and libcurlu.la (noinst convenience lib built from overlapping
+  # sources). Serialized the build (`make -j1`) in build.sh.
+  cvc_revision: 5
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

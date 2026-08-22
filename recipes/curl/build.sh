@@ -71,7 +71,17 @@ if [[ -n "${CVC_DEPS_PREFIX}" && -d "${CVC_DEPS_PREFIX}/include/openssl" ]]; the
 fi
 
 ./configure "${CONFIGURE_ARGS[@]}"
-make -j "${CVC_JOBS}"
+# Serial build: under -j>1, curl's lib/Makefile builds the sibling libtool
+# targets libcurl.la (installed, shared) and libcurlu.la (noinst
+# convenience lib, same sources under different .lo names) close together,
+# and a parallel run can interleave their CCLD/.libs steps — observed as
+# "ld: cannot find libcurl.so.4" / "unknown directive" in libcurl.exp
+# immediately after "CCLD libcurlu.la", with make reporting "Waiting for
+# unfinished jobs". This hit linux, freebsd, openbsd, and netbsd
+# simultaneously in the same build run — a libtool/make race, not a
+# platform-specific bug. curl is small enough that a serial build's extra
+# time is a fair price for not chasing this race across every platform.
+make -j1
 make install
 
 # OpenBSD: libtool's shared-library versioning support does not emit a
