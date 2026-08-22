@@ -96,9 +96,25 @@ make install
 # in whatever prefix it's eventually installed into (the build-time prefix
 # is ephemeral). patchelf sets a real $ORIGIN here, unlike the LDFLAGS
 # attempts above.
+#
+# NetBSD/Linux/FreeBSD's libtool creates BOTH the real, fully-versioned
+# file (libcurl.so.12.0) AND a shorter SONAME-convention symlink
+# (libcurl.so.12 -> libcurl.so.12.0); a plain `ls libcurl.so.*` glob picks
+# the symlink first (alphabetically, the shorter string sorts before its
+# own longer-with-suffix form). Setting SONAME to that symlink's name
+# reproduced NetBSD's OWN pre-existing (and equally broken) convention:
+# bin/cmake's build failed with "Shared object libcurl.so.12 not found"
+# despite LD_LIBRARY_PATH and RPATH both correctly pointing at the exact
+# directory containing that exact symlink — NetBSD's rtld/ldd did not
+# follow the symlink hop the same way it resolved libssl.so.3 (a REAL file
+# matching its own SONAME, no indirection, which loaded fine in the same
+# ldd check). Using `find -type f` instead of `ls` always selects the real
+# underlying file, so the SONAME we set never requires a symlink hop to
+# resolve — matches what already worked by accident on OpenBSD (whose
+# libtool never created the shorter symlink at all, only the real file).
 case "${CVC_PLATFORM:-}" in
     linux|freebsd|openbsd|netbsd)
-        _cvc_libcurl_versioned=$(ls "${CVC_INSTALL_DIR}"/lib/libcurl.so.* 2>/dev/null | head -1 || true)
+        _cvc_libcurl_versioned=$(find "${CVC_INSTALL_DIR}/lib" -maxdepth 1 -name 'libcurl.so.*' -type f 2>/dev/null | head -1 || true)
         if [[ -n "${_cvc_libcurl_versioned}" ]]; then
             _cvc_libcurl_name="$(basename "${_cvc_libcurl_versioned}")"
             patchelf --set-soname "${_cvc_libcurl_name}" "${_cvc_libcurl_versioned}"

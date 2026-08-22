@@ -55,7 +55,26 @@ recipe:
   # wasn't the cause. Widened patchelf from an OpenBSD-only build dep to
   # all four ELF platforms (linux/freebsd/openbsd/netbsd), since the
   # LDFLAGS rpath was silently broken everywhere, not just OpenBSD.
-  cvc_revision: 6
+  #
+  # Bumped 6 -> 7: NetBSD's cmake build failed at a NEW stage — bin/cmake
+  # (self-built during cmake's own bootstrap) couldn't be invoked during
+  # `make install`: "Shared object libcurl.so.12 not found", despite
+  # LD_LIBRARY_PATH and RPATH both correctly pointing at the exact
+  # directory containing that exact filename (confirmed via cmake's own
+  # build.sh debug ldd check, which resolved libssl.so.3 from the same
+  # directory just fine in the same run). Root cause: NetBSD's (and
+  # Linux/FreeBSD's) libtool ALSO creates a shorter SONAME-convention
+  # symlink (libcurl.so.12 -> libcurl.so.12.0) alongside the real
+  # fully-versioned file; v6's `ls libcurl.so.*` glob picked that symlink
+  # (alphabetically first) and set SONAME to a name that itself requires a
+  # symlink hop to resolve. NetBSD's rtld/ldd apparently doesn't follow that
+  # hop via LD_LIBRARY_PATH/RPATH lookup, unlike a SONAME that matches a
+  # real file directly (openssl's libssl.so.3 has no such indirection and
+  # loaded fine). Switched to `find -type f` so the real, non-symlink file
+  # is always selected and SONAME never requires symlink resolution — this
+  # is what OpenBSD was already doing by accident (its libtool never
+  # created the shorter symlink in the first place).
+  cvc_revision: 7
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
