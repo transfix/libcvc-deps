@@ -19,7 +19,17 @@ recipe:
   # (which doesn't exist — it's the very file this link step produces).
   # Two independently -Wl,-prefixed flags (the same pattern already used for
   # -Wl,-rpath -Wl,$$ORIGIN two lines above) avoid the comma-split entirely.
-  cvc_revision: 3
+  #
+  # Bumped 3 -> 4: +cvc.3 hit the EXACT SAME "ld: error: cannot open
+  # libcurl.so.12.0" failure — splitting into two -Wl, flags did not help
+  # either; libtool's filename classifier matches the value regardless of how
+  # it's split. Gave up on injecting -soname through libtool's own link step
+  # entirely. Reverted build.sh to the plain (working, soname-less) build and
+  # added a POST-install patchelf --set-soname step, which operates on the
+  # already-linked artifact and never touches libtool's argument handling.
+  # Added patchelf as an OpenBSD-only build dependency (already has an
+  # OpenBSD recipe in this tree).
+  cvc_revision: 4
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -39,7 +49,16 @@ source:
 patches: []
 
 depends:
-  build: []
+  build:
+    # OpenBSD only: post-install SONAME injection (see build.sh) — libtool's
+    # OpenBSD versioning support doesn't emit -soname, and passing it via
+    # LDFLAGS through libtool's own -Wl, handling reliably breaks the link
+    # (tried both a single comma-joined flag and two separate -Wl, flags;
+    # both produced "ld: error: cannot open libcurl.so.12.0: No such file or
+    # directory" — libtool's argument classifier matches the filename-shaped
+    # value as a reference to an existing library no matter how it's split).
+    - name: patchelf
+      platforms: [openbsd]
   runtime:
     - name: openssl
       version: "^3.0"

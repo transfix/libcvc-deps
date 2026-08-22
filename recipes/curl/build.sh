@@ -70,48 +70,40 @@ if [[ -n "${CVC_DEPS_PREFIX}" && -d "${CVC_DEPS_PREFIX}/include/openssl" ]]; the
     esac
 fi
 
-# OpenBSD: libtool's shared-library versioning support does not emit a
-# DT_SONAME for libcurl.so at all (confirmed via readelf -d — no SONAME tag,
-# vs. e.g. libssl.so.3/libcrypto.so.3 which DO have one). Per ELF semantics, a
-# consumer linking against a .so with no self-declared SONAME falls back to
-# recording the literal path it resolved the library at — which is this job's
-# own ephemeral CVC_DEPS_PREFIX. Every later consumer of a packaged libcurl
-# then bakes in that dead path (cmake: "ld.so: cmake: can't load library
-# '.../cvcpkg-job-curl-.../lib/libcurl.so.12.0'"), independent of the
-# consumer's own RPATH/LD_LIBRARY_PATH handling — a NEEDED entry containing
-# '/' is opened as a literal path, never searched. Force a proper SONAME at
-# curl's own link time so it never gets baked as a path anywhere downstream.
-#
-# The SONAME string must equal the actual filename curl's own build installs
-# (verified: "libcurl.so.12.0" for curl 8.13.0 on this OpenBSD toolchain's
-# libtool versioning scheme — NOT Linux's conventional "libcurl.so.4"; a
-# mismatch would make the file claim a SONAME no file on disk actually has).
-#
-# MUST be two separate -Wl, flags, not one comma-joined -Wl,-soname,X: this
-# libtool splits a comma-joined -Wl,A,B into tokens A and B and re-scans each
-# one, and its own argument classifier matches "libcurl.so.12.0" against its
-# lib*.so* heuristic for "this looks like an existing library to link
-# against" — stripping the -Wl, protection and passing it to the linker as a
-# bare positional input file instead of a -soname value. That input doesn't
-# exist yet (it's the very file this link step produces), so the link fails
-# with "ld: error: cannot open libcurl.so.12.0: No such file or directory"
-# (hit once, on the first version of this fix). Two independently-prefixed
-# -Wl, flags aren't joined or re-split, so the heuristic never sees a bare
-# "libcurl.so.12.0" token to misclassify.
-if [[ "${CVC_PLATFORM:-}" == "openbsd" ]]; then
-    export LDFLAGS="${LDFLAGS:-} -Wl,-soname -Wl,libcurl.so.12.0"
-fi
-
 ./configure "${CONFIGURE_ARGS[@]}"
 make -j "${CVC_JOBS}"
 make install
 
-# OpenBSD only: libtool also never creates the bare libcurl.so symlink
-# (only the versioned libcurl.so.<N> lands in the install dir), which is
-# what a plain `-lcurl` link line conventionally expects to find.
+# OpenBSD: libtool's shared-library versioning support does not emit a
+# DT_SONAME for libcurl.so at all (confirmed via readelf -d on a built
+# libcurl.so.12.0 — no SONAME tag, vs. e.g. libssl.so.3/libcrypto.so.3 from
+# our own openssl recipe, which DO have one). Per ELF semantics, a consumer
+# linking against a .so with no self-declared SONAME falls back to recording
+# the literal path it resolved the library at — which is THIS job's own
+# ephemeral CVC_DEPS_PREFIX. Every later consumer of a packaged libcurl then
+# bakes in that dead path (cmake: "ld.so: cmake: can't load library '.../
+# cvcpkg-job-curl-.../lib/libcurl.so.12.0'"), independent of the consumer's
+# own RPATH/LD_LIBRARY_PATH handling — a NEEDED entry containing '/' is
+# opened as a literal path, never searched.
+#
+# Tried forcing it at curl's own link time via LDFLAGS -Wl,-soname,X — both a
+# single comma-joined flag and two separate -Wl, flags reliably broke the
+# build instead ("ld: error: cannot open libcurl.so.12.0: No such file or
+# directory"): libtool's own argument classifier matches the filename-shaped
+# value as a reference to an existing library to link against and strips the
+# -Wl, protection, regardless of how the flag is split. Post-processing the
+# ALREADY-LINKED artifact with patchelf sidesteps libtool's argument handling
+# entirely.
 if [[ "${CVC_PLATFORM:-}" == "openbsd" ]]; then
     _cvc_libcurl_versioned=$(ls "${CVC_INSTALL_DIR}"/lib/libcurl.so.* 2>/dev/null | head -1 || true)
-    if [[ -n "${_cvc_libcurl_versioned}" && ! -e "${CVC_INSTALL_DIR}/lib/libcurl.so" ]]; then
-        ln -sf "$(basename "${_cvc_libcurl_versioned}")" "${CVC_INSTALL_DIR}/lib/libcurl.so"
+    if [[ -n "${_cvc_libcurl_versioned}" ]]; then
+        _cvc_libcurl_name="$(basename "${_cvc_libcurl_versioned}")"
+        patchelf --set-soname "${_cvc_libcurl_name}" "${_cvc_libcurl_versioned}"
+        # libtool also never creates the bare libcurl.so symlink (only the
+        # versioned file lands in the install dir), which is what a plain
+        # -lcurl link line conventionally expects to find.
+        if [[ ! -e "${CVC_INSTALL_DIR}/lib/libcurl.so" ]]; then
+            ln -sf "${_cvc_libcurl_name}" "${CVC_INSTALL_DIR}/lib/libcurl.so"
+        fi
     fi
 fi
