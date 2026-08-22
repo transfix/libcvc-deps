@@ -19,7 +19,14 @@ recipe:
   # re-derives and embeds the same ephemeral libcurl.so location from the
   # find_package(CURL) imported target regardless. -DCMAKE_SKIP_INSTALL_RPATH=ON
   # on OpenBSD suppresses that automatic path too.
-  cvc_revision: 3
+  cvc_revision: 4
+  # Bumped 3 -> 4: no build.sh content change here -- the actual root
+  # cause was in curl, not cmake (libcurl.so had no DT_SONAME at all on
+  # OpenBSD, so ANY consumer linking it, not just cmake, baked in the
+  # literal ephemeral build path; see the curl recipe for the full
+  # diagnosis and fix). Bumping so cmake gets rebuilt against the now-
+  # fixed curl artifact -- the dependency resolver does not automatically
+  # rebuild a consumer just because one of its dependencies changed.
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
