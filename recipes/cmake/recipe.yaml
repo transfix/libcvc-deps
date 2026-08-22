@@ -2,7 +2,16 @@ schema_version: 1
 recipe:
   name: cmake
   upstream_version: "3.31.7"
-  cvc_revision: 1
+  # Bumped 1 -> 2: two OpenBSD build.sh fixes landed (link our OpenSSL instead
+  # of the system LibreSSL; stop baking CMAKE_INSTALL_RPATH to the ephemeral
+  # per-job CVC_DEPS_PREFIX, which left every packaged cmake binary with a
+  # dangling rpath once its own build job's scratch dir was deleted, breaking
+  # every later job that installed cmake as a build-tool dependency — e.g.
+  # lerc/libjpeg-turbo: "ld.so: cmake: can't load library '.../libcurl.so.12.0'").
+  # Without a revision bump the dependency resolver kept treating the
+  # already-succeeded pre-fix build as satisfying "cmake" and never rebuilt it,
+  # even after both content fixes were pushed to the dev server.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
