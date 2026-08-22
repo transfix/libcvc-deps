@@ -16,11 +16,15 @@ case "${CVC_PLATFORM}" in
         [[ "$(uname -m)" == "aarch64" ]] && TARGET="BSD-aarch64"
         ;;
     openbsd)
-        # OpenBSD needs its own target — the generic BSD-* target
-        # produces shared objects that don't link libc, which fails
-        # with OpenBSD's default --no-undefined linker behaviour.
-        TARGET="OpenBSD-x86_64"
-        [[ "$(uname -m)" == "aarch64" ]] && TARGET="OpenBSD-aarch64"
+        # openssl 3.x has no "OpenBSD-*" target (Configure only knows the
+        # generic BSD-* family); the old OpenBSD-x86_64 value made Configure
+        # dump its usage and exit 1, so this never built. Use the valid
+        # BSD-x86_64 target. The build runs under clang, which links libc into
+        # shared objects on OpenBSD, satisfying its default -zdefs/--no-undefined
+        # (the concern in the previous comment); if a shared link ever reports
+        # undefined libc symbols, add `-lc` to the Configure line below.
+        TARGET="BSD-x86_64"
+        [[ "$(uname -m)" == "aarch64" ]] && TARGET="BSD-aarch64"
         ;;
     netbsd)
         TARGET="BSD-x86_64"
