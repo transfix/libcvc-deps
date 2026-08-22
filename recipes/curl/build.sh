@@ -47,20 +47,20 @@ if [[ -n "${CVC_DEPS_PREFIX}" && -d "${CVC_DEPS_PREFIX}/include/openssl" ]]; the
     CONFIGURE_ARGS+=(--with-openssl="${CVC_DEPS_PREFIX}")
     export PKG_CONFIG_PATH="${CVC_DEPS_PREFIX}/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
     export LD_LIBRARY_PATH="${CVC_DEPS_PREFIX}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
-    # Embed $ORIGIN RPATH so libcurl finds libssl next to itself in any prefix.
-    # The temporary build prefix gets cleaned up, so absolute RPATHs won't work.
-    #
-    # Needs a DOUBLED dollar sign, not a single backslash-escaped one: the
-    # single `\$ORIGIN` this used to be produces a literal one-`$` string from
-    # bash, but that string is then substituted again by make (LDFLAGS flows
-    # through the generated Makefile), and make's own `$X` syntax treats `$O`
-    # as a reference to a single-letter variable named "O" (undefined, so
-    # empty) — silently eating the "$O" and leaving `RIGIN` baked into the
-    # actual RPATH (confirmed via readelf -d on a built libcurl.so: `Library
-    # runpath: [RIGIN]`). `\$\$ORIGIN` survives both layers: bash removes the
-    # backslashes leaving literal `$$ORIGIN`, then make's own `$$` -> `$`
-    # collapse leaves exactly `$ORIGIN` for the linker.
-    export LDFLAGS="${LDFLAGS:-} -Wl,-rpath,\$\$ORIGIN"
+    # Do NOT inject -Wl,-rpath,$ORIGIN via LDFLAGS here. Tried both a
+    # single-backslash `\$ORIGIN` (bash emits literal `$ORIGIN`, but that
+    # string flows through curl's generated Makefile and gets re-expanded by
+    # make itself, whose `$X` syntax reads `$O` as a reference to an
+    # undefined single-letter variable — silently eating it and baking
+    # `RIGIN` into the actual RPATH) and a doubled `\$\$ORIGIN` (survives
+    # make's collapse and yields a correct literal `$ORIGIN` — confirmed via
+    # readelf). The correct value is the one that broke the build: with a
+    # real `$ORIGIN` present, "CCLD libcurl.la" fails ("cannot find
+    # libcurl.so.4" / lld: "unknown directive" reading .libs/libcurl.exp) on
+    # every platform (linux, freebsd, openbsd, netbsd) — libtool's `-Wl,`
+    # comma-splitting (the same mechanism that broke the -soname attempt
+    # below) apparently mishandles this token too. The rpath is set
+    # correctly post-install via patchelf instead, below.
     # On BSDs, dlopen() lives in libc (no separate -ldl).  Static OpenSSL
     # requires -lpthread at link time, but curl's configure probes only add
     # -lpthread via the "-ldl -lpthread" code path, which never fires on BSD.
@@ -71,49 +71,45 @@ if [[ -n "${CVC_DEPS_PREFIX}" && -d "${CVC_DEPS_PREFIX}/include/openssl" ]]; the
 fi
 
 ./configure "${CONFIGURE_ARGS[@]}"
-# Serial build: under -j>1, curl's lib/Makefile builds the sibling libtool
-# targets libcurl.la (installed, shared) and libcurlu.la (noinst
-# convenience lib, same sources under different .lo names) close together,
-# and a parallel run can interleave their CCLD/.libs steps — observed as
-# "ld: cannot find libcurl.so.4" / "unknown directive" in libcurl.exp
-# immediately after "CCLD libcurlu.la", with make reporting "Waiting for
-# unfinished jobs". This hit linux, freebsd, openbsd, and netbsd
-# simultaneously in the same build run — a libtool/make race, not a
-# platform-specific bug. curl is small enough that a serial build's extra
-# time is a fair price for not chasing this race across every platform.
-make -j1
+make -j "${CVC_JOBS}"
 make install
 
-# OpenBSD: libtool's shared-library versioning support does not emit a
-# DT_SONAME for libcurl.so at all (confirmed via readelf -d on a built
-# libcurl.so.12.0 — no SONAME tag, vs. e.g. libssl.so.3/libcrypto.so.3 from
-# our own openssl recipe, which DO have one). Per ELF semantics, a consumer
-# linking against a .so with no self-declared SONAME falls back to recording
-# the literal path it resolved the library at — which is THIS job's own
-# ephemeral CVC_DEPS_PREFIX. Every later consumer of a packaged libcurl then
-# bakes in that dead path (cmake: "ld.so: cmake: can't load library '.../
-# cvcpkg-job-curl-.../lib/libcurl.so.12.0'"), independent of the consumer's
-# own RPATH/LD_LIBRARY_PATH handling — a NEEDED entry containing '/' is
+# ELF platforms (linux/freebsd/openbsd/netbsd): fix up libcurl's shared
+# object post-install with patchelf instead of via LDFLAGS, sidestepping
+# libtool's own -Wl, argument handling entirely — both a SONAME and an
+# -rpath value fed through LDFLAGS reliably broke the "CCLD libcurl.la"
+# link step (see the CONFIGURE_ARGS block above and the recipe.yaml
+# changelog for the two failed LDFLAGS attempts).
+#
+# SONAME: OpenBSD's libtool does not emit a DT_SONAME for libcurl.so at all
+# (confirmed via readelf -d — no SONAME tag, vs. e.g. libssl.so.3 from our
+# own openssl recipe, which does have one). Per ELF semantics, a consumer
+# linking against a .so with no self-declared SONAME falls back to
+# recording the literal path it resolved the library at — this job's own
+# ephemeral CVC_DEPS_PREFIX. Every later consumer of a packaged libcurl
+# then bakes in that dead path (cmake: "ld.so: cmake: can't load library
+# '.../cvcpkg-job-curl-.../lib/libcurl.so.12.0'"), independent of the
+# consumer's own RPATH/LD_LIBRARY_PATH — a NEEDED entry containing '/' is
 # opened as a literal path, never searched.
 #
-# Tried forcing it at curl's own link time via LDFLAGS -Wl,-soname,X — both a
-# single comma-joined flag and two separate -Wl, flags reliably broke the
-# build instead ("ld: error: cannot open libcurl.so.12.0: No such file or
-# directory"): libtool's own argument classifier matches the filename-shaped
-# value as a reference to an existing library to link against and strips the
-# -Wl, protection, regardless of how the flag is split. Post-processing the
-# ALREADY-LINKED artifact with patchelf sidesteps libtool's argument handling
-# entirely.
-if [[ "${CVC_PLATFORM:-}" == "openbsd" ]]; then
-    _cvc_libcurl_versioned=$(ls "${CVC_INSTALL_DIR}"/lib/libcurl.so.* 2>/dev/null | head -1 || true)
-    if [[ -n "${_cvc_libcurl_versioned}" ]]; then
-        _cvc_libcurl_name="$(basename "${_cvc_libcurl_versioned}")"
-        patchelf --set-soname "${_cvc_libcurl_name}" "${_cvc_libcurl_versioned}"
-        # libtool also never creates the bare libcurl.so symlink (only the
-        # versioned file lands in the install dir), which is what a plain
-        # -lcurl link line conventionally expects to find.
-        if [[ ! -e "${CVC_INSTALL_DIR}/lib/libcurl.so" ]]; then
-            ln -sf "${_cvc_libcurl_name}" "${CVC_INSTALL_DIR}/lib/libcurl.so"
+# RPATH: libcurl needs to find our built libssl/libcrypto next to itself
+# in whatever prefix it's eventually installed into (the build-time prefix
+# is ephemeral). patchelf sets a real $ORIGIN here, unlike the LDFLAGS
+# attempts above.
+case "${CVC_PLATFORM:-}" in
+    linux|freebsd|openbsd|netbsd)
+        _cvc_libcurl_versioned=$(ls "${CVC_INSTALL_DIR}"/lib/libcurl.so.* 2>/dev/null | head -1 || true)
+        if [[ -n "${_cvc_libcurl_versioned}" ]]; then
+            _cvc_libcurl_name="$(basename "${_cvc_libcurl_versioned}")"
+            patchelf --set-soname "${_cvc_libcurl_name}" "${_cvc_libcurl_versioned}"
+            patchelf --set-rpath '$ORIGIN' "${_cvc_libcurl_versioned}"
+            # libtool doesn't always create the bare libcurl.so symlink
+            # (only the versioned file lands in the install dir on
+            # OpenBSD), which is what a plain -lcurl link line
+            # conventionally expects to find.
+            if [[ ! -e "${CVC_INSTALL_DIR}/lib/libcurl.so" ]]; then
+                ln -sf "${_cvc_libcurl_name}" "${CVC_INSTALL_DIR}/lib/libcurl.so"
+            fi
         fi
-    fi
-fi
+        ;;
+esac
