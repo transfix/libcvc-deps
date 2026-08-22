@@ -2,7 +2,14 @@ schema_version: 1
 recipe:
   name: curl
   upstream_version: "8.13.0"
-  cvc_revision: 1
+  # Bumped 1 -> 2: OpenBSD fixes — libcurl.so had no DT_SONAME at all (so
+  # every consumer that links it bakes in the literal, ephemeral build-time
+  # path instead of a portable soname, e.g. cmake: "ld.so: cmake: can't load
+  # library '.../cvcpkg-job-curl-.../lib/libcurl.so.12.0'"), no bare
+  # libcurl.so symlink, and the $ORIGIN rpath meant for its own libssl lookup
+  # was corrupted to "RIGIN" by an under-escaped LDFLAGS string (make's `$O`
+  # single-letter variable syntax ate the dollar+O). See build.sh.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

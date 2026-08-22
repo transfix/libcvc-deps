@@ -49,7 +49,18 @@ if [[ -n "${CVC_DEPS_PREFIX}" && -d "${CVC_DEPS_PREFIX}/include/openssl" ]]; the
     export LD_LIBRARY_PATH="${CVC_DEPS_PREFIX}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
     # Embed $ORIGIN RPATH so libcurl finds libssl next to itself in any prefix.
     # The temporary build prefix gets cleaned up, so absolute RPATHs won't work.
-    export LDFLAGS="${LDFLAGS:-} -Wl,-rpath,\$ORIGIN"
+    #
+    # Needs a DOUBLED dollar sign, not a single backslash-escaped one: the
+    # single `\$ORIGIN` this used to be produces a literal one-`$` string from
+    # bash, but that string is then substituted again by make (LDFLAGS flows
+    # through the generated Makefile), and make's own `$X` syntax treats `$O`
+    # as a reference to a single-letter variable named "O" (undefined, so
+    # empty) — silently eating the "$O" and leaving `RIGIN` baked into the
+    # actual RPATH (confirmed via readelf -d on a built libcurl.so: `Library
+    # runpath: [RIGIN]`). `\$\$ORIGIN` survives both layers: bash removes the
+    # backslashes leaving literal `$$ORIGIN`, then make's own `$$` -> `$`
+    # collapse leaves exactly `$ORIGIN` for the linker.
+    export LDFLAGS="${LDFLAGS:-} -Wl,-rpath,\$\$ORIGIN"
     # On BSDs, dlopen() lives in libc (no separate -ldl).  Static OpenSSL
     # requires -lpthread at link time, but curl's configure probes only add
     # -lpthread via the "-ldl -lpthread" code path, which never fires on BSD.
@@ -59,6 +70,36 @@ if [[ -n "${CVC_DEPS_PREFIX}" && -d "${CVC_DEPS_PREFIX}/include/openssl" ]]; the
     esac
 fi
 
+# OpenBSD: libtool's shared-library versioning support does not emit a
+# DT_SONAME for libcurl.so at all (confirmed via readelf -d — no SONAME tag,
+# vs. e.g. libssl.so.3/libcrypto.so.3 which DO have one). Per ELF semantics, a
+# consumer linking against a .so with no self-declared SONAME falls back to
+# recording the literal path it resolved the library at — which is this job's
+# own ephemeral CVC_DEPS_PREFIX. Every later consumer of a packaged libcurl
+# then bakes in that dead path (cmake: "ld.so: cmake: can't load library
+# '.../cvcpkg-job-curl-.../lib/libcurl.so.12.0'"), independent of the
+# consumer's own RPATH/LD_LIBRARY_PATH handling — a NEEDED entry containing
+# '/' is opened as a literal path, never searched. Force a proper SONAME at
+# curl's own link time so it never gets baked as a path anywhere downstream.
+#
+# The SONAME string must equal the actual filename curl's own build installs
+# (verified: "libcurl.so.12.0" for curl 8.13.0 on this OpenBSD toolchain's
+# libtool versioning scheme — NOT Linux's conventional "libcurl.so.4"; a
+# mismatch would make the file claim a SONAME no file on disk actually has).
+if [[ "${CVC_PLATFORM:-}" == "openbsd" ]]; then
+    export LDFLAGS="${LDFLAGS:-} -Wl,-soname,libcurl.so.12.0"
+fi
+
 ./configure "${CONFIGURE_ARGS[@]}"
 make -j "${CVC_JOBS}"
 make install
+
+# OpenBSD only: libtool also never creates the bare libcurl.so symlink
+# (only the versioned libcurl.so.<N> lands in the install dir), which is
+# what a plain `-lcurl` link line conventionally expects to find.
+if [[ "${CVC_PLATFORM:-}" == "openbsd" ]]; then
+    _cvc_libcurl_versioned=$(ls "${CVC_INSTALL_DIR}"/lib/libcurl.so.* 2>/dev/null | head -1 || true)
+    if [[ -n "${_cvc_libcurl_versioned}" && ! -e "${CVC_INSTALL_DIR}/lib/libcurl.so" ]]; then
+        ln -sf "$(basename "${_cvc_libcurl_versioned}")" "${CVC_INSTALL_DIR}/lib/libcurl.so"
+    fi
+fi
