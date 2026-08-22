@@ -37,11 +37,19 @@ if [[ -n "${CVC_DEPS_PREFIX:-}" ]]; then
     # CMAKE_CXX_STANDARD_LIBRARIES so they appear at the END of every link
     # command (LDFLAGS goes at the start, which is too early for the linker's
     # left-to-right symbol resolution with static archives).
+    #
+    # The -L is essential on OpenBSD: its system libcrypto is LibreSSL, which
+    # does NOT implement the OpenSSL-3 EVP_MAC_* API, so a bare `-lcrypto`
+    # resolves to /usr/lib and the link fails with undefined EVP_MAC_* symbols.
+    # Point -L at our cvcpkg OpenSSL (which has them) so it wins over the system
+    # LibreSSL. (FreeBSD/NetBSD ship real OpenSSL in base and linked fine
+    # without the -L, but pinning our prefix there too is strictly more
+    # hermetic.)
     case "$(uname)" in
         *BSD)
             CMAKE_FLAGS+=(
-                "-DCMAKE_CXX_STANDARD_LIBRARIES=-lssl -lcrypto -lpthread"
-                "-DCMAKE_C_STANDARD_LIBRARIES=-lssl -lcrypto -lpthread"
+                "-DCMAKE_CXX_STANDARD_LIBRARIES=-L${CVC_DEPS_PREFIX}/lib -lssl -lcrypto -lpthread"
+                "-DCMAKE_C_STANDARD_LIBRARIES=-L${CVC_DEPS_PREFIX}/lib -lssl -lcrypto -lpthread"
             )
             ;;
     esac
