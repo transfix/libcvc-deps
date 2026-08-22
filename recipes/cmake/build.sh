@@ -98,6 +98,13 @@ if [[ -n "${CVC_DEPS_PREFIX:-}" ]]; then
     ls -la "${CVC_DEPS_PREFIX}/lib"/libssl* "${CVC_DEPS_PREFIX}/lib"/libcurl* 2>/dev/null || echo "=== WARNING: libssl/libcurl not found in prefix/lib"
     echo "=== cmake build.sh: checking bin/cmake dynamic deps:"
     ldd bin/cmake 2>/dev/null | grep -E "ssl|curl|crypto" || true
+    echo "=== cmake build.sh: bin/cmake RPATH/RUNPATH/NEEDED (readelf):"
+    readelf -d bin/cmake 2>/dev/null | grep -E "RPATH|RUNPATH|NEEDED" || echo "=== readelf unavailable or failed, trying objdump:"
+    objdump -p bin/cmake 2>/dev/null | grep -E "RPATH|RUNPATH|NEEDED" || true
+    echo "=== cmake build.sh: pkg-config libcurl libs (if pkg-config sees it):"
+    pkg-config --libs libcurl 2>&1 || true
+    echo "=== cmake build.sh: full contents of prefix/lib (post-curl-install):"
+    find "${CVC_DEPS_PREFIX}/lib" -maxdepth 1 -iname 'libcurl*' -exec ls -la {} \; 2>/dev/null || true
 fi
 
 make install
