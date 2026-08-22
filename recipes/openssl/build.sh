@@ -43,6 +43,17 @@ else
     OPENSSL_OPTS+=(shared)
 fi
 
+# OpenBSD: don't build openssl's optional loadable modules. Its linker enforces
+# -zdefs (no undefined symbols) even for loadable .so, but the engine/provider
+# modules (padlock, ossltest, loader_attic, legacy) don't pull in libc, so they
+# fail to link with undefined libc symbols (__sF, fprintf, memcpy, ...). The
+# core libcrypto/libssl link fine; the consumer chain here (curl -> cmake ->
+# the CMake-built codecs -> imagemagick) needs neither dynamic engines nor the
+# legacy provider. Build engines into libcrypto and drop the legacy provider.
+if [[ "${CVC_PLATFORM}" == "openbsd" ]]; then
+    OPENSSL_OPTS+=(no-dynamic-engine no-legacy)
+fi
+
 # --openssldir must point to the HOST system's CA certificate tree, not the
 # install prefix.  If it pointed into $CVC_INSTALL_DIR/etc/ssl, any process
 # that loads our libssl via LD_LIBRARY_PATH (e.g. Python, curl) would look
