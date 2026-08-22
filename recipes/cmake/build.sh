@@ -43,7 +43,20 @@ if [[ -n "${CVC_DEPS_PREFIX:-}" ]]; then
     # RPATH did. So on OpenBSD, skip embedding it and rely entirely on
     # LD_LIBRARY_PATH (which every consuming job re-exports to ITS OWN
     # current, valid deps prefix — see env-openbsd.sh).
-    if [[ "${CVC_PLATFORM:-}" != "openbsd" ]]; then
+    #
+    # Merely omitting -DCMAKE_INSTALL_RPATH is NOT enough on its own: CMake's
+    # find_package(CURL)-derived imported target carries the exact path
+    # libcurl.so was found at (this same ephemeral CVC_DEPS_PREFIX), and
+    # CMAKE_INSTALL_RPATH_USE_LINK_PATH defaults ON, so CMake AUTOMATICALLY
+    # re-derives and embeds that same dangling directory as an install rpath
+    # regardless of what CMAKE_INSTALL_RPATH itself is set to (empirically
+    # confirmed: the previous commit only removed the explicit flags and the
+    # exact same dangling-rpath failure persisted on a freshly rebuilt cmake).
+    # -DCMAKE_SKIP_INSTALL_RPATH=ON suppresses BOTH the explicit and the
+    # automatic link-path rpath, forcing 100% reliance on LD_LIBRARY_PATH.
+    if [[ "${CVC_PLATFORM:-}" == "openbsd" ]]; then
+        CMAKE_FLAGS+=(-DCMAKE_SKIP_INSTALL_RPATH=ON)
+    else
         CMAKE_FLAGS+=(-DCMAKE_BUILD_RPATH="${CVC_DEPS_PREFIX}/lib")
         CMAKE_FLAGS+=(-DCMAKE_INSTALL_RPATH="${CVC_DEPS_PREFIX}/lib")
     fi

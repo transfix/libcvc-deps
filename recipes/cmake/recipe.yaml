@@ -11,7 +11,15 @@ recipe:
   # Without a revision bump the dependency resolver kept treating the
   # already-succeeded pre-fix build as satisfying "cmake" and never rebuilt it,
   # even after both content fixes were pushed to the dev server.
-  cvc_revision: 2
+  #
+  # Bumped 2 -> 3: +cvc.2 (rebuilt fresh, confirmed via a new job id) still
+  # shipped the same dangling OpenBSD rpath. Removing the explicit
+  # CMAKE_BUILD_RPATH/CMAKE_INSTALL_RPATH flags wasn't sufficient:
+  # CMAKE_INSTALL_RPATH_USE_LINK_PATH defaults ON, so CMake automatically
+  # re-derives and embeds the same ephemeral libcurl.so location from the
+  # find_package(CURL) imported target regardless. -DCMAKE_SKIP_INSTALL_RPATH=ON
+  # on OpenBSD suppresses that automatic path too.
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
