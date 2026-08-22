@@ -26,8 +26,27 @@ if [[ -n "${CVC_DEPS_PREFIX:-}" ]]; then
     # Embed RPATH so the cmake binary (and any helpers) can find
     # recipe-built shared libs (libcurl, libssl) at build-time AND
     # install-time without relying on LD_LIBRARY_PATH alone.
-    CMAKE_FLAGS+=(-DCMAKE_BUILD_RPATH="${CVC_DEPS_PREFIX}/lib")
-    CMAKE_FLAGS+=(-DCMAKE_INSTALL_RPATH="${CVC_DEPS_PREFIX}/lib")
+    #
+    # NOT on OpenBSD: CVC_DEPS_PREFIX is an ephemeral, job-specific scratch
+    # directory (cvcpkg-job-cmake-<id>/cvcpkg-prefix-cmake-<id>/) that is
+    # deleted once THIS build finishes. Baking it as an absolute RPATH means
+    # every LATER job that installs the packaged cmake as a build-tool
+    # dependency ships a binary whose rpath points at a directory that no
+    # longer exists — e.g. lerc/libjpeg-turbo failed with
+    # "ld.so: cmake: can't load library '.../cvcpkg-job-cmake-.../lib/
+    # libcurl.so.12.0'" (exit 137). On Linux/macOS/FreeBSD/NetBSD this is
+    # silently masked (a system copy of libcurl, or a loader that falls back
+    # to LD_LIBRARY_PATH — set two lines below — even when RPATH is present
+    # but unsatisfied). OpenBSD's ld.so does not fall back once an RPATH
+    # entry exists, confirmed empirically: exporting LD_LIBRARY_PATH in
+    # env-openbsd.sh alone did not fix this, only removing the dangling
+    # RPATH did. So on OpenBSD, skip embedding it and rely entirely on
+    # LD_LIBRARY_PATH (which every consuming job re-exports to ITS OWN
+    # current, valid deps prefix — see env-openbsd.sh).
+    if [[ "${CVC_PLATFORM:-}" != "openbsd" ]]; then
+        CMAKE_FLAGS+=(-DCMAKE_BUILD_RPATH="${CVC_DEPS_PREFIX}/lib")
+        CMAKE_FLAGS+=(-DCMAKE_INSTALL_RPATH="${CVC_DEPS_PREFIX}/lib")
+    fi
     export PKG_CONFIG_PATH="${CVC_DEPS_PREFIX}/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
     export LD_LIBRARY_PATH="${CVC_DEPS_PREFIX}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
     # On BSDs with static OpenSSL, cmake's bundled libarchive (cmlibarchive)
