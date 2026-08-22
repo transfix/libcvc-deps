@@ -86,8 +86,20 @@ fi
 # (verified: "libcurl.so.12.0" for curl 8.13.0 on this OpenBSD toolchain's
 # libtool versioning scheme — NOT Linux's conventional "libcurl.so.4"; a
 # mismatch would make the file claim a SONAME no file on disk actually has).
+#
+# MUST be two separate -Wl, flags, not one comma-joined -Wl,-soname,X: this
+# libtool splits a comma-joined -Wl,A,B into tokens A and B and re-scans each
+# one, and its own argument classifier matches "libcurl.so.12.0" against its
+# lib*.so* heuristic for "this looks like an existing library to link
+# against" — stripping the -Wl, protection and passing it to the linker as a
+# bare positional input file instead of a -soname value. That input doesn't
+# exist yet (it's the very file this link step produces), so the link fails
+# with "ld: error: cannot open libcurl.so.12.0: No such file or directory"
+# (hit once, on the first version of this fix). Two independently-prefixed
+# -Wl, flags aren't joined or re-split, so the heuristic never sees a bare
+# "libcurl.so.12.0" token to misclassify.
 if [[ "${CVC_PLATFORM:-}" == "openbsd" ]]; then
-    export LDFLAGS="${LDFLAGS:-} -Wl,-soname,libcurl.so.12.0"
+    export LDFLAGS="${LDFLAGS:-} -Wl,-soname -Wl,libcurl.so.12.0"
 fi
 
 ./configure "${CONFIGURE_ARGS[@]}"

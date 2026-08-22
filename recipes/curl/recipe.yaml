@@ -9,7 +9,17 @@ recipe:
   # libcurl.so symlink, and the $ORIGIN rpath meant for its own libssl lookup
   # was corrupted to "RIGIN" by an under-escaped LDFLAGS string (make's `$O`
   # single-letter variable syntax ate the dollar+O). See build.sh.
-  cvc_revision: 2
+  #
+  # Bumped 2 -> 3: +cvc.2 failed to build at all — "ld: error: cannot open
+  # libcurl.so.12.0: No such file or directory" during the CCLD libcurl.la
+  # step. The comma-joined -Wl,-soname,libcurl.so.12.0 gets split by libtool
+  # into separate tokens, and its filename heuristic matched "libcurl.so.12.0"
+  # as a reference to an existing library to link against, stripping the
+  # -Wl, protection and passing it to the linker as a bare positional input
+  # (which doesn't exist — it's the very file this link step produces).
+  # Two independently -Wl,-prefixed flags (the same pattern already used for
+  # -Wl,-rpath -Wl,$$ORIGIN two lines above) avoid the comma-split entirely.
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
