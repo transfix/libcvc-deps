@@ -61,9 +61,30 @@ else
         echo "  WARN: no C++ compiler on PATH in the test shell; consumer compile+run skipped"
         exit 0
     fi
+    # The env-<platform>.sh scripts need build-only variables (CVC_SOURCE_DIR,
+    # CVC_BUILD_DIR), so mirror the bits a consumer build needs instead:
+    # pkgsrc/ports tool paths AFTER our own prefix, the cvcpkg-built ninja
+    # when present (NetBSD's pkgsrc ninja crashes when invoked from a clean
+    # environment), and the build's own compiler preference on the BSDs.
+    case "${CVC_PLATFORM:-}" in
+        netbsd)          export PATH="${PATH}:/usr/pkg/bin:/usr/pkg/sbin" ;;
+        freebsd|openbsd) export PATH="${PATH}:/usr/local/bin" ;;
+    esac
+    case "${CVC_PLATFORM:-}" in
+        netbsd|freebsd|openbsd)
+            if command -v clang++ >/dev/null 2>&1; then
+                export CC="${CC:-clang}" CXX="${CXX:-clang++}"
+            fi ;;
+    esac
+    _ninja=""
+    if [[ -n "${CVC_DEPS_PREFIX:-}" && -x "${CVC_DEPS_PREFIX}/bin/ninja" ]]; then
+        _ninja="${CVC_DEPS_PREFIX}/bin/ninja"
+    fi
+    echo "  tools: cmake=$(command -v cmake || echo MISSING) ninja=${_ninja:-$(command -v ninja || echo MISSING)} CXX=${CXX:-default}"
     cmake -G Ninja -S "${SMOKE_DIR}" -B "${TMPDIR_T}/b" \
         -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_PREFIX_PATH="${CVC_INSTALL_DIR}"
+        -DCMAKE_PREFIX_PATH="${CVC_INSTALL_DIR}" \
+        ${_ninja:+-DCMAKE_MAKE_PROGRAM="${_ninja}"}
     cmake --build "${TMPDIR_T}/b"
     exe="${TMPDIR_T}/b/jolt_smoke"
     [[ -x "${exe}.exe" ]] && exe="${exe}.exe"
