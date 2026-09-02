@@ -21,6 +21,19 @@ if [[ "${CVC_PLATFORM:-}" == "wasm" ]]; then
 
     # Activate emscripten environment (adds emcc, node to PATH).
     # shellcheck disable=SC1091
+# emcc must WRITE to the emsdk cache (lock files under cache/symbol_lists at
+# link time, system libs on first use). On a shared builder the emsdk can
+# belong to another account -- catx-03's /opt/cvc-wasm/emsdk is owned by
+# github-runner while the libcvc-deps runner is tfx -- and every em++ link
+# then dies with PermissionError on the .json.lock. Fall back to a per-user
+# cache when the emsdk's own cache is not writable; an explicit EM_CACHE wins.
+_cvc_em_cache="${CVC_EMSDK_DIR}/upstream/emscripten/cache"
+if [[ -z "${EM_CACHE:-}" && -d "${_cvc_em_cache}" && ! -w "${_cvc_em_cache}" ]]; then
+    export EM_CACHE="${HOME}/.cache/emscripten-cvcpkg"
+    mkdir -p "${EM_CACHE}"
+    echo "cvcpkg: emsdk cache is read-only for $(id -un); using EM_CACHE=${EM_CACHE}" >&2
+fi
+
     source "${CVC_EMSDK_DIR}/emsdk_env.sh" 2>/dev/null
 
     if ! command -v emcc >/dev/null 2>&1; then
