@@ -421,9 +421,8 @@ class TestSourceNone:
     """
 
     def test_none_source_is_accepted(self, schema):
-        assert _valid(schema, _recipe(source={"type": "none"})), (
-            "schema rejects source.type: none — data-only recipes cannot ship"
-        )
+        why = "schema rejects source.type: none - data-only recipes cannot ship"
+        assert _valid(schema, _recipe(source={"type": "none"})), why
 
     def test_none_needs_no_url_sha_or_path(self, schema):
         # The point of `none` is that there is nothing to pin.
