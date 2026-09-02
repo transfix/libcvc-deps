@@ -52,14 +52,27 @@ elif [[ "${CVC_PLATFORM:-}" == "wasi" || "${CVC_PLATFORM:-}" == "cosmo" ]]; then
         || { echo "FAIL: lib/libJolt.a not found"; exit 1; }
     echo "  OK: libJolt.a found (no run on ${CVC_PLATFORM})"
 else
+    if [[ "${CVC_PLATFORM:-}" == "windows" && -n "${CVC_WINHOST:-}" ]]; then
+        echo "  WARN: host-delegated Windows build; consumer compile+run skipped"
+        exit 0
+    fi
+    if [[ "${CVC_PLATFORM:-}" == "windows" ]] \
+        && ! command -v cl >/dev/null 2>&1 && ! command -v cc >/dev/null 2>&1; then
+        echo "  WARN: no C++ compiler on PATH in the test shell; consumer compile+run skipped"
+        exit 0
+    fi
     cmake -G Ninja -S "${SMOKE_DIR}" -B "${TMPDIR_T}/b" \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_PREFIX_PATH="${CVC_INSTALL_DIR}"
     cmake --build "${TMPDIR_T}/b"
-    # Shared bundles: the consumer needs the prefix's lib dir at run time.
+    exe="${TMPDIR_T}/b/jolt_smoke"
+    [[ -x "${exe}.exe" ]] && exe="${exe}.exe"
+    # Shared bundles: the consumer needs the prefix's lib dir (bin on Windows)
+    # at run time.
+    PATH="${CVC_INSTALL_DIR}/bin:${PATH}" \
     LD_LIBRARY_PATH="${CVC_INSTALL_DIR}/lib:${LD_LIBRARY_PATH:-}" \
     DYLD_LIBRARY_PATH="${CVC_INSTALL_DIR}/lib:${DYLD_LIBRARY_PATH:-}" \
-        "${TMPDIR_T}/b/jolt_smoke"
+        "${exe}"
     echo "  OK: native consumer built + ran"
 fi
 

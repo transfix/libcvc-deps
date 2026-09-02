@@ -22,6 +22,10 @@
 #include <cmath>
 #include <cstdio>
 
+// JPH_VERSION_ID expands to a cast through an unqualified `uint64`, which only
+// resolves inside namespace JPH; pull the alias in so the macro works here.
+using JPH::uint64;
+
 namespace Layers {
 static constexpr JPH::ObjectLayer NON_MOVING = 0;
 static constexpr JPH::ObjectLayer MOVING = 1;
