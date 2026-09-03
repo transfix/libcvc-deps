@@ -78,7 +78,7 @@ def qualified_name(name: str, org: str = "") -> str:
 class SourceSpec:
     """Parsed ``source:`` block from recipe.yaml."""
 
-    type: str  # tarball | git | vcpkg | brew | apt | vendored | prebuilt |
+    type: str  # tarball | git | vcpkg | brew | apt | vendored | prebuilt | none |
     #            python_wheel | python_sdist
     url: str = ""
     mirror: str = ""
@@ -964,9 +964,11 @@ def fetch_source(recipe: Recipe, work_dir: Path, *, platform: str = "", arch: st
         if not sha256:
             raise RecipeError("python_sdist requires a sha256 (pinning is required)")
         return _fetch_tarball(replace(src, url=url, sha256=sha256, mirror=""), work_dir)
-    if src.type in ("vcpkg", "brew", "apt", "prebuilt"):
-        # These are handled by the build script itself; return a
-        # dummy source directory.
+    if src.type in ("vcpkg", "brew", "apt", "prebuilt", "none"):
+        # These are handled by the build script itself (or, for ``none``,
+        # there is nothing to fetch: data-only recipes stage their payload
+        # out-of-band and are packed with --from-prefix); return a dummy
+        # source directory.
         dummy = work_dir / "src"
         dummy.mkdir(exist_ok=True)
         return dummy
@@ -1929,8 +1931,12 @@ def stage_bundle(
     _rewrite_shebangs(staging_dir, temp_prefixes)
     _rewrite_exe_launchers(staging_dir, temp_prefixes)
 
-    # Write manifest
-    meta_dir = staging_dir / "share" / "libcvc-deps"
+    # Write the manifest under a subdirectory named for the bundle itself.
+    # Every bundle installs into the same shared prefix, and extraction is a
+    # blind merge -- a flat share/libcvc-deps/manifest.yaml would be
+    # overwritten by whichever bundle extracted last, leaving every other
+    # co-installed package's manifest clobbered and unverifiable.
+    meta_dir = staging_dir / "share" / "libcvc-deps" / manifest["bundle"]["name"]
     meta_dir.mkdir(parents=True, exist_ok=True)
     with open(meta_dir / "manifest.yaml", "w") as f:
         yaml.dump(manifest, f, default_flow_style=False, sort_keys=False)
