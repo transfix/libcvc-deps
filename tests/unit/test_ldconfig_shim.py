@@ -19,6 +19,7 @@ from __future__ import annotations
 import os
 import subprocess
 
+import pytest
 import yaml
 
 from cvcpkg.builder import BuildContext, Recipe, _build_env
@@ -107,6 +108,10 @@ class TestLdconfigShim:
         ctx, env = _ctx_env(tmp_path, "linux")
         assert not (ctx.build_dir / ".cvcpkg-shims").exists()
 
+    @pytest.mark.skipif(
+        os.name == "nt",
+        reason="the shim is a /bin/sh script; it is only ever installed on BSD builders",
+    )
     def test_shim_is_a_silent_no_op_for_mutating_forms(self, tmp_path):
         """Every form that would REWRITE the hints must do nothing, quietly."""
         ctx, _ = _ctx_env(tmp_path, "openbsd")
