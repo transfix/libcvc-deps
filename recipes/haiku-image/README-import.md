@@ -30,7 +30,8 @@
 > fix reports `access.ssh_pubkey_baked: false` no matter what key it was
 > given; see [Access](#access) below.
 >
-> Per `CVCPKG-ROADMAP.md` Phase 9 ("Finish the Haiku builder"), the image is
+> Per `docs/roadmap/CVCPKG-ROADMAP.md` Phase 9 ("Fleet & platform
+> expansion"), the image is
 > proven end to end as of 2026-08-06: it builds in ~35 min, boots under
 > Incus, takes a DHCP lease, accepts SSH on its baked key, compiles and runs
 > a C binary in the guest, and starts `sshd` headlessly from its
