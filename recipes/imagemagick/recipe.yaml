@@ -33,25 +33,26 @@ recipe:
   # $LIBS. (cvc.9 release linked only because that fleet job happened to see a
   # system libwebp bundling sharpyuv; not reproducible/portable.)
   #
-  # Bumped 10 -> 11: align the version across platforms. Unix builds from the
+  # (Revisions 11 -> 22 were the wasm codec-chain and Windows coder-staging
+  # iteration series — see the build-wasm.sh / build.ps1 history.)
+  #
+  # Bumped 22 -> 23: align the version across platforms. Unix builds from the
   # 7.1.1-41 source tarball, but the Windows recipe repackages the official
   # prebuilt installer (build.ps1) and that was pinned to 7.1.2-22 — a version
   # skew. Upstream deletes old release binaries from GitHub, so 7.1.1's Windows
   # installer is already gone (404); the earliest still-downloadable is 7.1.2-15.
   # So align UP: bump the source tarball to 7.1.2-24 (the same version whose
   # Windows installer we repackage) rather than down to an unavailable 7.1.1.
-  # All platforms are now 7.1.2-24.
-  #
-  # Bumped 11 -> 12: OpenBSD build failure — MagickCore/random.c
-  # unconditionally does `#if defined(MAGICKCORE_HAVE_GETENTROPY) #include
-  # <sys/random.h> #endif`. configure correctly detects getentropy() exists
-  # (OpenBSD originated that syscall), but assumes any platform with
-  # getentropy() also has <sys/random.h> — true on Linux/macOS/FreeBSD/NetBSD,
-  # false on OpenBSD, which declares getentropy() in <unistd.h> instead
-  # (already pulled in earlier via MagickCore/studio.h's own
-  # MAGICKCORE_HAVE_UNISTD_H-gated include). Patched to skip the
-  # <sys/random.h> include on OpenBSD only.
-  cvc_revision: 12
+  # All platforms are now 7.1.2-24. Also fixes an OpenBSD build failure —
+  # MagickCore/random.c unconditionally does `#if
+  # defined(MAGICKCORE_HAVE_GETENTROPY) #include <sys/random.h> #endif`.
+  # configure correctly detects getentropy() exists (OpenBSD originated that
+  # syscall), but assumes any platform with getentropy() also has
+  # <sys/random.h> — true on Linux/macOS/FreeBSD/NetBSD, false on OpenBSD,
+  # which declares getentropy() in <unistd.h> instead (already pulled in
+  # earlier via MagickCore/studio.h's own MAGICKCORE_HAVE_UNISTD_H-gated
+  # include). Patched to skip the <sys/random.h> include on OpenBSD only.
+  cvc_revision: 23
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -70,9 +71,10 @@ patches:
   - openbsd-getentropy-no-sys-random-h.patch
 
 depends:
-  build:
+  host_tools:
     - cmake
     - ninja
+  build:
     # Full delegate set — a hermetic ImageMagick built entirely against cvcpkg
     # codecs (no fall-through to the build host's system libraries). build.sh
     # exposes the deps prefix and enables each delegate (--with-jpeg/png/webp/…);
@@ -107,7 +109,6 @@ depends:
     # THIS libxml2 rather than the build host's system one.
     - name: libxml2
       version: "^2.12"
-  host_tools: []
 
 build:
   matrix:
