@@ -45,7 +45,7 @@ jobs:
           if command -v cvcpkg >/dev/null 2>&1; then
             echo "cvcpkg present at $(command -v cvcpkg)"
           else
-            python3 -m pip install --user --upgrade .
+            python3 -m pip install --user --upgrade '.[publish]'
             echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           fi
           PATH="$HOME/.local/bin:$PATH" cvcpkg --version
