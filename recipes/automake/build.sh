@@ -35,6 +35,22 @@ case "$(uname -s)" in
         ;;
 esac
 
+# autom4te (invoked by autoconf, which automake's configure runs to prove the
+# toolchain works) resolves m4 as $M4 or the hard-coded /usr/bin/m4 — it never
+# consults PATH. On minimal Linux builders /usr/bin/m4 does not exist, and on
+# the BSDs it is the non-GNU base m4, so without help autoconf's self-test dies
+# with "need GNU m4 1.4 or later". Point $M4 at the GNU m4 shipped in this
+# build's dependency closure (prefixed onto PATH by cvcpkg); prefer a gm4 name
+# where the platform installs GNU m4 under it.
+if [[ -z "${M4:-}" ]]; then
+    for candidate in gm4 m4; do
+        if command -v "${candidate}" >/dev/null 2>&1; then
+            export M4="$(command -v "${candidate}")"
+            break
+        fi
+    done
+fi
+
 cd "${CVC_SOURCE_DIR}"
 
 ./configure \

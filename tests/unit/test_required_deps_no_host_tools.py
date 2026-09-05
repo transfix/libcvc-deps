@@ -51,18 +51,13 @@ def _dep_name(d: object) -> str:
     return ""
 
 
-# Recipes whose host-tool leak is known but not yet cleaned up here, with the
-# reason each is deferred. The fix (an explicit ``runtime: []``) is trivial and
-# identical to the others, but is held back because rebuilding the bundle to
-# republish the corrected manifest currently fails for an unrelated,
-# pre-existing reason. Tracked as follow-up; do NOT grow this list casually.
-_DEFERRED_LEAKS = {
-    # automake's build fails on linux/freebsd on the dev fleet (unrelated to the
-    # metadata change), so bumping its revision to republish is blocked until
-    # that build is repaired. Its leak (autoconf) is a host tool that is
-    # published on every platform automake targets, so it stays masked.
-    "automake",
-}
+# Escape hatch for a recipe whose host-tool leak is understood but cannot yet be
+# cleaned up, because bumping its revision to republish the corrected manifest is
+# blocked by an unrelated, pre-existing build failure. The fix (an explicit
+# ``runtime: []``) is trivial; the block is always external. Currently empty —
+# every leaf recipe is enforced. Do NOT add to this casually: fix the recipe (and
+# whatever blocks its rebuild) instead of deferring it here.
+_DEFERRED_LEAKS: set[str] = set()
 
 
 def _recipe_files() -> list[Path]:
