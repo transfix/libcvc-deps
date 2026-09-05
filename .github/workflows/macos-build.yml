@@ -47,6 +47,11 @@ on:
           - "4"
           - "5"
           - "6"
+      recipes:
+        description: "Recipe names to build (space/comma separated; default: every recipe). Set to publish just a few — a one-off fix, or filling a single gap without a multi-hour full-DAG run."
+        required: false
+        default: ""
+        type: string
       ref:
         description: "Git ref to build recipes from (default: prod)"
         required: false
@@ -78,6 +83,10 @@ on:
         required: false
         type: string
         default: "4"
+      recipes:
+        required: false
+        type: string
+        default: ""
       ref:
         required: false
         type: string
@@ -100,10 +109,17 @@ jobs:
     steps:
       - id: gen
         run: |
-          TOTAL="${{ inputs.shards || '4' }}"
-          # Generate JSON array [0, 1, ..., TOTAL-1]
-          SHARDS=$(python3 -c "import json; print(json.dumps(list(range(int('$TOTAL')))))")
-          echo "shards=$SHARDS" >> "$GITHUB_OUTPUT"
+          # A targeted `recipes` build is small — one shard, no sharding math.
+          # Sharding a two-recipe build across four runners means three of them
+          # queue for a macOS runner only to find nothing in their slice.
+          if [ -n "${{ inputs.recipes }}" ]; then
+            echo 'shards=[0]' >> "$GITHUB_OUTPUT"
+          else
+            TOTAL="${{ inputs.shards || '4' }}"
+            # Generate JSON array [0, 1, ..., TOTAL-1]
+            SHARDS=$(python3 -c "import json; print(json.dumps(list(range(int('$TOTAL')))))")
+            echo "shards=$SHARDS" >> "$GITHUB_OUTPUT"
+          fi
 
   build-shard:
     name: macOS ${{ inputs.runner || 'macos-latest' }} shard ${{ matrix.shard }}/${{ inputs.shards || '4' }} (${{ inputs.config }}/${{ inputs.link }})
@@ -153,6 +169,20 @@ jobs:
           mkdir -p "${{ github.workspace }}/prefix"
           mkdir -p "${{ github.workspace }}/dist"
 
+          # Trailing recipe names narrow pack-all to just those, exactly as in
+          # linux-arm-build.yml. Empty expands to nothing, so the full-DAG
+          # behaviour is unchanged when the input is not given.
+          RECIPES="$(echo '${{ inputs.recipes }}' | tr ',' ' ' | xargs || true)"
+
+          # A targeted build runs as a single shard (see the setup job), so
+          # asking for shard 0/4 of two recipes would slice three of them away.
+          if [ -n "$RECIPES" ]; then
+            SHARD_ARGS=()
+            echo "Targeted build: $RECIPES"
+          else
+            SHARD_ARGS=(--shard "${{ matrix.shard }}/${SHARDS}")
+          fi
+
           cvcpkg pack-all \
             --keep-going \
             --platform macos \
@@ -161,10 +191,11 @@ jobs:
             --prefix "${{ github.workspace }}/prefix" \
             --output-dir "${{ github.workspace }}/dist" \
             --recipes-dir recipes \
-            --shard "${{ matrix.shard }}/${SHARDS}" \
+            ${SHARD_ARGS[@]+"${SHARD_ARGS[@]}"} \
             --server-cache "$CVCPKG_SERVER_URL" \
             --server-cache-token "$CVCPKG_TOKEN" \
-            --server-cache-push
+            --server-cache-push \
+            ${RECIPES}
 
       - name: List built packages
         if: always()
