@@ -61,9 +61,7 @@ _DEFERRED_LEAKS: set[str] = set()
 
 
 def _recipe_files() -> list[Path]:
-    return sorted(
-        p for p in _RECIPES.glob("*/recipe.yaml") if p.parent.name not in _DEFERRED_LEAKS
-    )
+    return sorted(p for p in _RECIPES.glob("*/recipe.yaml") if p.parent.name not in _DEFERRED_LEAKS)
 
 
 @pytest.mark.parametrize("recipe_path", _recipe_files(), ids=lambda p: p.parent.name)
