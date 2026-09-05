@@ -65,14 +65,7 @@ def _dep_name(d: object) -> str:
 # these are in the wasm-mt demo closure. Shrink this list as the follow-up lands;
 # do NOT add to it — a new leaking recipe must be fixed, not deferred.
 _DEFERRED_LEAKS: set[str] = {
-    "abseil",
     "automake",
-    "c-ares",
-    "clapack",
-    "fftw3",
-    "gmp",
-    "gsl",
-    "libgeos",
     "libspatialindex",
     "log4cplus",
     "lz4",
