@@ -17,7 +17,7 @@ recipe:
   # macOS build, so the claim could never resolve — and Intel/Apple-Silicon Macs
   # got no OpenBLAS at all. macOS uses the same NOFORTRAN/C_LAPACK path as the
   # BSDs, plus USE_OPENMP=OFF: Apple clang ships no libomp, so -fopenmp fails.
-  cvc_revision: 6
+  cvc_revision: 7
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -35,6 +35,7 @@ source:
 patches: []
 
 depends:
+  runtime: []
   build:
     - cmake
     - ninja

@@ -6,7 +6,7 @@ recipe:
   # ports/pkgsrc, and their absence left xkbcommon-x11 advertising those two
   # platforms while depending on a package that had no build for them, so the
   # claim could never resolve.
-  cvc_revision: 2
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -27,6 +27,7 @@ source:
 patches: []
 
 depends:
+  runtime: []
   build:
     - ninja
     - meson
