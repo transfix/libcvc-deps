@@ -2,9 +2,13 @@ schema_version: 1
 recipe:
   name: pocketfft
   # No upstream releases or tags -- the cpp branch is the distribution, so the
-  # version tracks the pinned commit's date. source.commit below is what
-  # actually identifies the code.
-  upstream_version: "2024.11.05"
+  # version tracks the pinned commit's date. The source URL below is what
+  # actually identifies the code; this only has to sort correctly and not lie.
+  #
+  #   $ gh api repos/mreineck/pocketfft/commits/c90e55b3d5...
+  #   author date:    2026-06-30T11:37:42Z
+  #   committer date: 2026-06-30T11:37:42Z
+  upstream_version: "2026.06.30"
   cvc_revision: 1
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
