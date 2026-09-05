@@ -38,17 +38,33 @@ esac
 # autom4te (invoked by autoconf, which automake's configure runs to prove the
 # toolchain works) resolves m4 as $M4 or the hard-coded /usr/bin/m4 — it never
 # consults PATH. On minimal Linux builders /usr/bin/m4 does not exist, and on
-# the BSDs it is the non-GNU base m4, so without help autoconf's self-test dies
-# with "need GNU m4 1.4 or later". Point $M4 at the GNU m4 shipped in this
-# build's dependency closure (prefixed onto PATH by cvcpkg); prefer a gm4 name
-# where the platform installs GNU m4 under it.
-if [[ -z "${M4:-}" ]]; then
+# the BSDs it is the non-GNU base m4, so autoconf's self-test dies with "need
+# GNU m4 1.4 or later" → "the installed version of autoconf does not work".
+#
+# Point $M4 at the GNU m4 cvcpkg installed into this build's closure. Address it
+# by prefix rather than PATH, and set it UNCONDITIONALLY: the fleet builder runs
+# build scripts under `os.environ.copy()`, and its environment already exports a
+# stale M4 (an absolute /usr/bin/m4 that does not exist on the builder), so a
+# "only if unset" guard would leave that poisoned value in place and PATH order
+# would not save us.  Fall back to a GNU m4 on PATH (gm4 on the BSDs) only when
+# the closure somehow lacks one.
+m4_bin=""
+for root in "${CVC_BUILD_PREFIX:-}" "${CVC_DEPS_PREFIX:-}" "${CVC_INSTALL_DIR:-}"; do
+    if [[ -n "${root}" && -x "${root}/bin/m4" ]]; then
+        m4_bin="${root}/bin/m4"
+        break
+    fi
+done
+if [[ -z "${m4_bin}" ]]; then
     for candidate in gm4 m4; do
         if command -v "${candidate}" >/dev/null 2>&1; then
-            export M4="$(command -v "${candidate}")"
+            m4_bin="$(command -v "${candidate}")"
             break
         fi
     done
+fi
+if [[ -n "${m4_bin}" ]]; then
+    export M4="${m4_bin}"
 fi
 
 cd "${CVC_SOURCE_DIR}"
