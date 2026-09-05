@@ -67,10 +67,23 @@ if [[ -n "${m4_bin}" ]]; then
     export M4="${m4_bin}"
 fi
 
+# --- diagnostics (cvc.4): the fleet keeps reporting "autoconf does not work"
+# even with m4 in the closure; surface exactly what m4 resolved to and prove it
+# runs, so the build-log tail explains a failure instead of hiding it. ---
+echo "[automake/build.sh] CVC_BUILD_PREFIX=[${CVC_BUILD_PREFIX:-UNSET}]"
+echo "[automake/build.sh] CVC_DEPS_PREFIX=[${CVC_DEPS_PREFIX:-UNSET}]"
+echo "[automake/build.sh] M4=[${M4:-UNSET}]  autom4te=[$(command -v autom4te || echo none)]  autoconf=[$(command -v autoconf || echo none)]"
+if [[ -n "${M4:-}" ]]; then
+    echo "[automake/build.sh] \$M4 --version:"; "${M4}" --version 2>&1 | head -1 || echo "  (M4 failed to run)"
+fi
+
 cd "${CVC_SOURCE_DIR}"
 
-./configure \
-    --prefix="${CVC_INSTALL_DIR}"
+if ! ./configure --prefix="${CVC_INSTALL_DIR}"; then
+    echo "=== configure failed; config.log tail ==="
+    tail -n 40 config.log 2>/dev/null || true
+    exit 1
+fi
 
 "${MAKE}" -j "${CVC_JOBS}"
 "${MAKE}" install
