@@ -232,7 +232,12 @@ jobs:
        contains(format(',{0},', vars.CI_ALLOWED_ACTORS), format(',{0},', github.actor)))
     needs: [test, validate, lint]
     runs-on: [self-hosted, Linux, cvcpkg-prod]
-    timeout-minutes: 30
+    # The isolated `docker-container` builder below trades a little speed for not
+    # sharing a content store with the rest of the host: a cold buildkit plus the
+    # `--no-cache` rebuild of three images runs slower than the shared warm one,
+    # and a first run overran the old 30-minute cap while Playwright was still
+    # going (build + Docker suite passed).  Give it headroom.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
 
