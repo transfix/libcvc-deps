@@ -30,6 +30,17 @@ import httpx
 import pytest
 
 
+def _text(raw: bytes | None) -> str:
+    """Decode child-process output without dying on its console encoding.
+
+    The server's own startup errors contain non-ASCII (an em-dash), and on
+    Windows the child emits those in cp1252 — a strict utf-8 decode then raises
+    UnicodeDecodeError from inside the error path, hiding the failure it was
+    trying to report.
+    """
+    return (raw or b"").decode("utf-8", errors="replace")
+
+
 def _free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -115,7 +126,7 @@ class _Server:
         deadline = time.time() + 60
         while time.time() < deadline:
             if self._proc.poll() is not None:
-                err = (self._proc.stderr.read() or b"").decode()[-2000:]
+                err = _text(self._proc.stderr.read())[-2000:]
                 raise RuntimeError(f"server exited: {err}")
             try:
                 if httpx.get(f"{self.url}/healthz", timeout=2).status_code == 200:
@@ -139,7 +150,7 @@ class _Server:
         except subprocess.TimeoutExpired:
             self._proc.kill()
             raise
-        return self._proc.returncode, (self._proc.stderr.read() or b"").decode()
+        return self._proc.returncode, _text(self._proc.stderr.read())
 
 
 @pytest.fixture(scope="module")
