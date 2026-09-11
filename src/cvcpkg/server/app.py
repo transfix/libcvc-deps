@@ -423,6 +423,22 @@ _db_orgs = None  # DbOrgStore when using DB backend
 _db_principals = None  # DbPrincipalStore when using DB backend
 
 
+def _acts_as(actor: TokenRecord, name: str) -> bool:
+    """True if *actor* may act on the token row called *name*.
+
+    A delegated token verifies as its principal (``joe``), so comparing
+    ``actor.name`` alone permanently refuses it access to its own row
+    (``joe.laptop``) — which made rotate, the documented response to a leaked
+    secret, admin-only for precisely the tokens most likely to leak.
+
+    The ``actor.name`` branch stays first: the in-memory TokenStore never sets
+    ``credential_name``, so a bare swap would 403 every non-database deployment.
+    """
+    if actor.name == name:
+        return True
+    return bool(getattr(actor, "credential_name", "")) and actor.credential_name == name
+
+
 def _esc_text(value: object) -> str:
     """HTML-escape a string destined for a flash banner."""
     from cvcpkg.server.admin_ui import _esc
@@ -5058,7 +5074,7 @@ def create_app(
             raise HTTPException(401, "invalid or expired token")
         _reject_grace_secret(actor)
         # Non-admins can only update their own email
-        if actor.role != TokenRole.admin and actor.name != name:
+        if actor.role != TokenRole.admin and not _acts_as(actor, name):
             raise HTTPException(403, "you can only update your own token's email")
 
         async with _audit_txn(
@@ -5097,7 +5113,7 @@ def create_app(
         if actor is None:
             raise HTTPException(401, "invalid or expired token")
         _reject_grace_secret(actor)
-        if actor.role != TokenRole.admin and actor.name != name:
+        if actor.role != TokenRole.admin and not _acts_as(actor, name):
             raise HTTPException(403, "you can only update your own profile")
 
         async with _audit_txn(
@@ -5146,7 +5162,7 @@ def create_app(
             actor = state.tokens.verify(raw_actor)
         if actor is None:
             raise HTTPException(401, "invalid or expired token")
-        if actor.role != TokenRole.admin and actor.name != name:
+        if actor.role != TokenRole.admin and not _acts_as(actor, name):
             raise HTTPException(403, "you can only rotate your own token")
         # A pre-rotation grace secret must not rotate: a leaked old secret
         # could otherwise re-rotate inside the window, mint itself a fresh
@@ -6882,6 +6898,10 @@ def create_app(
             f"token:{record.name}",
             {"preferred_username": record.name, "email": record.email, "sub": record.name},
             record.role.value,
+            # The caller just authenticated AS this token, so its own name must
+            # not count against it; otherwise token `joe` becomes principal
+            # `joe-2` and loses every org `joe` belongs to.
+            allow_names={record.name},
         )
         if principal.disabled:
             return HTMLResponse(

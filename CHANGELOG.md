@@ -28,7 +28,7 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ---
 
-## Unreleased
+## v2.1.0
 
 ### Sign in to cvcpkg.org — the non-admin web surface
 
@@ -57,6 +57,15 @@ Added:
   (migration 028).
 - Per-form CSRF tokens (`server/csrf.py`), bound to both the session and the
   form's purpose, so a token lifted from one form cannot drive another.
+
+Two bugs the pre-release audit caught in this same work, worth naming because
+both were invisible to a green suite:
+- `list_tokens()` omitted `principal_id`, so every "is this token mine?" filter
+  matched nothing — an empty token list, a 404 on self-revoke, and a rename
+  guard that never fired, which would have let a handle owning packages and org
+  memberships be freed and re-allotted.
+- A disabled principal could still complete a login; a disabled *admin* got the
+  dashboard back and could re-enable themselves.
 
 How SSO identity reaches existing authorization, unchanged:
 - A token minted by the account page is named `<principal>.<label>` and

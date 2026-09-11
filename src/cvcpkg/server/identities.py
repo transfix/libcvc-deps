@@ -100,7 +100,13 @@ class DbPrincipalStore:
             return list((await session.execute(stmt)).scalars().all())
 
     async def upsert_from_claims(
-        self, issuer: str, subject: str, claims: dict, role: str
+        self,
+        issuer: str,
+        subject: str,
+        claims: dict,
+        role: str,
+        *,
+        allow_names: frozenset[str] | set[str] | None = None,
     ) -> tuple[PrincipalRow, bool]:
         """Resolve or create the principal for ``(issuer, subject)``.
 
@@ -108,6 +114,13 @@ class DbPrincipalStore:
         than swallowed because a changed email on an unchanged subject is the
         only signal available that an IdP may have reused a subject, which is
         otherwise completely silent.
+
+        ``allow_names`` exempts names from the taken-set.  It exists for the
+        token sign-in path: the taken-set includes every ``tokens.name``, which
+        includes the very token doing the authenticating — so without it, token
+        ``joe`` always lands on principal ``joe-2``, sees none of ``joe``'s
+        organizations, and cannot rename back to the name it already holds.
+        Pass only a name the caller has just authenticated as.
         """
         now = datetime.datetime.now(datetime.timezone.utc)
         email = str(claims.get("email") or "")
@@ -138,7 +151,7 @@ class DbPrincipalStore:
                 return row, email_changed
 
             base = _principals.sanitize_principal_name(claims)
-            taken = await self._taken_names_in(session)
+            taken = await self._taken_names_in(session) - set(allow_names or ())
             for candidate in _principals.collision_candidates(base):
                 if candidate in taken:
                     continue

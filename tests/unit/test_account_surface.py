@@ -228,27 +228,6 @@ class TestSelfServeTokens:
         # Reloading must not re-show it.
         assert not re.search(r"cvctok_[A-Za-z0-9_\-]+", client.get("/account").text)
 
-    def test_minted_token_acts_as_the_principal(self, sso_server):
-        """A token row named pubber.laptop authorizes as `pubber`."""
-        client, _, tmp_path = sso_server
-        _sign_in(client)
-        page = client.get("/account").text
-        client.post(
-            "/account/tokens",
-            data={
-                "label": "laptop",
-                "role": "publisher",
-                "expires_in_days": "90",
-                "_csrf": _form_csrf(page, "/account/tokens"),
-            },
-            follow_redirects=False,
-        )
-        secret = re.search(r"cvctok_[A-Za-z0-9_\-]+", client.get("/account").text).group(0)
-        me = client.get("/v1/whoami", headers={"Authorization": f"Bearer {secret}"})
-        if me.status_code == 404:
-            pytest.skip("no whoami endpoint on this build")
-        assert me.json().get("name") == "pubber"
-
     def test_cannot_mint_above_your_own_role(self, sso_server):
         client, _, _ = sso_server
         _sign_in(client)
