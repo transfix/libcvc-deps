@@ -130,6 +130,10 @@ from cvcpkg.server.models import (
     WebhookRegisterRequest,
     WebhookUpdateRequest,
 )
+from cvcpkg.server import admin_ui
+from cvcpkg.server import csrf as _csrf_mod
+from cvcpkg.server import principals as _principals_mod
+from cvcpkg.server import sessions as _sessions_mod
 from cvcpkg.server.oidc import OidcConfig as _OidcConfig
 from cvcpkg.server.oidc import validate_config as _oidc_validate_config
 
@@ -416,6 +420,38 @@ _db_tokens = None  # DbTokenStore when using DB backend
 _db_audit = None  # DbAuditLog when using DB backend
 _db_packages = None  # DbPackageIndex when using DB backend
 _db_orgs = None  # DbOrgStore when using DB backend
+_db_principals = None  # DbPrincipalStore when using DB backend
+
+
+def _esc_text(value: object) -> str:
+    """HTML-escape a string destined for a flash banner."""
+    from cvcpkg.server.admin_ui import _esc
+
+    return _esc(value)
+
+
+def _esc_role(role) -> str:
+    return _esc_text(getattr(role, "value", role))
+
+
+def _fallback_state_key() -> bytes:
+    """A per-process key for signing session cookies when none is configured.
+
+    Same reasoning as the admin dashboard's fallback: signing with a
+    publicly-known constant would let anyone forge a session, so an
+    unconfigured deployment gets a random key that is valid within the process
+    and unforgeable outside it.
+    """
+    import secrets as _s
+
+    global _FALLBACK_STATE_KEY
+    if not _FALLBACK_STATE_KEY:
+        _FALLBACK_STATE_KEY = _s.token_bytes(32)
+    return _FALLBACK_STATE_KEY
+
+
+_FALLBACK_STATE_KEY: bytes = b""
+_db_sessions = None  # DbSessionStore when using DB backend
 _db_downloads = None  # DbDownloadStore when using DB backend
 _db_telemetry = None  # DbTelemetryStore when using DB backend
 _db_mirrors = None  # DbMirrorStore when using DB backend
@@ -2095,6 +2131,7 @@ def create_app(
     async def lifespan(app: FastAPI):
         global _state, _START_TIME, _use_db
         global _db_tokens, _db_audit, _db_packages, _db_orgs
+        global _db_principals, _db_sessions
         global _db_downloads, _db_mirrors, _db_tags, _db_token_requests
         global _db_telemetry
         global _db_builders
@@ -2140,6 +2177,13 @@ def create_app(
             _db_audit = DbAuditLog()
             _db_packages = DbPackageIndex()
             _db_orgs = DbOrgStore()
+            from cvcpkg.server.identities import DbPrincipalStore
+            from cvcpkg.server.sessions import DbSessionStore
+
+            _db_principals = DbPrincipalStore()
+            _db_sessions = DbSessionStore(
+                getattr(_db_tokens, "_hmac_key", b"") or _fallback_state_key()
+            )
             _db_downloads = DbDownloadStore()
             _db_telemetry = DbTelemetryStore()
             _db_mirrors = DbMirrorStore()
@@ -6115,7 +6159,7 @@ def create_app(
     # the mechanism for machines.
 
     @app.get("/admin/oidc/login", tags=["admin"])
-    async def admin_oidc_login(request: Request):
+    async def admin_oidc_login(request: Request, next: str = "/admin"):
         """Begin the OIDC authorization-code flow (state + nonce + PKCE)."""
         import secrets as _secrets
 
@@ -6137,8 +6181,17 @@ def create_app(
         verifier, challenge = _oidc.new_pkce_pair()
         state = _secrets.token_urlsafe(16)
         nonce = _secrets.token_urlsafe(16)
+        # `next` rides inside the SIGNED transaction cookie, and is validated
+        # against a two-entry allow-list on the way out — never echoed from the
+        # query string, which would make this an open redirect.
         txn = _oidc.sign_txn(
-            _admin_session_key(), {"state": state, "verifier": verifier, "nonce": nonce}
+            _admin_session_key(),
+            {
+                "state": state,
+                "verifier": verifier,
+                "nonce": nonce,
+                "next": _safe_next(next),
+            },
         )
 
         url = _oidc.build_authorize_url(
@@ -6151,7 +6204,7 @@ def create_app(
             _oidc._TXN_COOKIE,
             txn,
             max_age=_oidc._TXN_TTL_SECONDS,
-            **admin_ui.session_cookie_kwargs(request=request),
+            **admin_ui.session_cookie_kwargs(path="/", request=request),
         )
         return resp
 
@@ -6215,34 +6268,76 @@ def create_app(
 
         role = _oidc.map_claims_to_role(claims, cfg)
         subject = _oidc.claims_subject(claims)
-        if role != "admin":
-            # Authenticated with the IdP but not entitled to the dashboard.
+        if role is None:
+            # Authenticated with the IdP, entitled to nothing here.  Only
+            # reachable when CVCPKG_OIDC_DEFAULT_ROLE is unset, which is the
+            # refuse-by-default posture.
             return HTMLResponse(
                 admin_ui.login_html(
                     error=(
-                        f"{subject or 'this account'} is not authorized for the admin "
-                        "dashboard (no admin group/email mapping)."
-                    )
+                        f"{subject or 'this account'} is not authorized for cvcpkg "
+                        "(no group mapping, and no default role is configured)."
+                    ),
+                    oidc_enabled=_oidc_enabled(),
                 ),
                 status_code=403,
             )
 
-        if _use_db and _db_audit is not None:
-            await _db_audit.record(
-                action=AuditAction.login,
-                actor=subject or "oidc-user",
-                target="admin-ui",
-                detail="admin dashboard login via OIDC",
+        # Every authenticated principal gets a *user* session, whatever their
+        # role.  This is what makes publisher and reader mean something in a
+        # browser instead of only on the server.
+        principal = None
+        if _use_db and _db_principals is not None:
+            principal, email_changed = await _db_principals.upsert_from_claims(
+                cfg.issuer, str(claims.get("sub") or subject), claims, role
+            )
+            if _db_audit is not None:
+                await _db_audit.record(
+                    action=AuditAction.login,
+                    actor=principal.name,
+                    target="account",
+                    detail=(
+                        f"OIDC login role={role}"
+                        + (" EMAIL-CHANGED-ON-EXISTING-SUBJECT" if email_changed else "")
+                    ),
+                )
+
+        dest = _safe_next(str(txn.get("next", "") or "/account"))
+        if role != "admin" and dest == "/admin":
+            # Signed in fine, but the dashboard is admin-only.  Send them to
+            # the surface they *can* use rather than a dead end.
+            dest = "/account"
+
+        resp = RedirectResponse(dest, status_code=303)
+
+        if principal is not None and _db_sessions is not None:
+            cookie = await _db_sessions.mint(
+                principal,
+                role,
+                ttl_seconds=admin_ui._session_ttl_seconds(),
+                device_label=(request.headers.get("user-agent") or "")[:128],
+                ip=(request.client.host if request.client else ""),
+            )
+            resp.set_cookie(
+                _sessions_mod.COOKIE_NAME,
+                cookie,
+                max_age=admin_ui._session_ttl_seconds(),
+                **admin_ui.session_cookie_kwargs(path="/", request=request),
             )
 
-        resp = RedirectResponse("/admin", status_code=303)
-        resp.set_cookie(
-            admin_ui._SESSION_COOKIE,
-            admin_ui.make_session_value(_admin_session_key()),
-            max_age=admin_ui._session_ttl_seconds(),
-            **admin_ui.session_cookie_kwargs(request=request),
-        )
+        # The admin cookie is minted only for admins, and remains a separate
+        # credential on its own path.  _has_admin_session never learned about
+        # the user session, so a publisher holding one still cannot reach
+        # /admin — the dashboard's gate is unchanged.
+        if role == "admin":
+            resp.set_cookie(
+                admin_ui._SESSION_COOKIE,
+                admin_ui.make_session_value(_admin_session_key()),
+                max_age=admin_ui._session_ttl_seconds(),
+                **admin_ui.session_cookie_kwargs(request=request),
+            )
         resp.delete_cookie(_oidc._TXN_COOKIE, path="/admin")
+        resp.delete_cookie(_oidc._TXN_COOKIE, path="/")
         return resp
 
     @app.post("/admin/logout", tags=["admin"])
@@ -6467,6 +6562,522 @@ def create_app(
         from cvcpkg.server.landing import org_detail_html
 
         return HTMLResponse(org_detail_html(slug))
+
+    @app.get("/auth/oidc/login", include_in_schema=False)
+    async def auth_oidc_login(request: Request, next: str = "/account"):
+        """Public alias for the OIDC login leg.
+
+        The dashboard route keeps working so an identity provider still
+        configured with the old redirect URI is not broken by this change.
+        """
+        return await admin_oidc_login(request, next=next)
+
+    @app.get("/auth/oidc/callback", response_class=HTMLResponse, include_in_schema=False)
+    async def auth_oidc_callback(
+        request: Request,
+        code: str = Query(""),
+        state: str = Query(""),
+        error: str = Query(""),
+    ):
+        return await admin_oidc_callback(request, code=code, state=state, error=error)
+
+    # ── Admin: principals ───────────────────────────────────
+
+    async def _orphan_memberships() -> list[dict]:
+        """org_members rows naming neither a live token nor a principal.
+
+        Each one is a grant attached to a name nobody holds — and precisely
+        the set that a new identity must never be allotted.  The operator has
+        had no way to see these at all until now.
+        """
+        if not _use_db:
+            return []
+        from sqlalchemy import select
+
+        from cvcpkg.server.db import (
+            OrganizationRow,
+            OrgMemberRow,
+            PrincipalRow,
+            TokenRow,
+            get_session,
+        )
+
+        async with get_session() as session:
+            tokens = {str(r) for (r,) in await session.execute(select(TokenRow.name)) if r}
+            people = {str(r) for (r,) in await session.execute(select(PrincipalRow.name)) if r}
+            rows = await session.execute(
+                select(OrgMemberRow.token_name, OrganizationRow.slug).join(
+                    OrganizationRow, OrganizationRow.id == OrgMemberRow.org_id
+                )
+            )
+            return [
+                {"token_name": str(name), "org_slug": str(slug)}
+                for name, slug in rows
+                if name and str(name) not in tokens and str(name) not in people
+            ]
+
+    @app.get("/admin/principals", tags=["admin"], response_class=HTMLResponse)
+    async def admin_principals_page(request: Request, q: str = Query("")):
+        if not _has_admin_session(request):
+            return HTMLResponse(admin_ui.login_html(oidc_enabled=_oidc_enabled()))
+        if not _use_db or _db_principals is None:
+            return HTMLResponse(
+                admin_ui.principals_html([], error="Principals require a database backend."),
+                status_code=501,
+            )
+        people = await _db_principals.list_all(q=q)
+        all_tokens = await _db_tokens.list_tokens()
+        rows = []
+        for p in people:
+            rows.append(
+                {
+                    "name": p.name,
+                    "issuer": p.issuer,
+                    "subject": p.subject,
+                    "email": p.email,
+                    "email_changed": bool(
+                        p.email and p.first_seen_email and p.email != p.first_seen_email
+                    ),
+                    "last_role": p.last_role,
+                    "disabled": p.disabled,
+                    "sessions": await _db_sessions.count_active_for_principal(p.id),
+                    "tokens": sum(
+                        1
+                        for t in all_tokens
+                        if getattr(t, "principal_id", None) == p.id and not t.revoked
+                    ),
+                }
+            )
+        return HTMLResponse(
+            admin_ui.principals_html(
+                rows,
+                orphan_memberships=await _orphan_memberships(),
+                q=q,
+                csrf_for=_csrf_for(_admin_csrf_sid(request)),
+            )
+        )
+
+    @app.post("/admin/principals/{name}/disable", tags=["admin"], include_in_schema=False)
+    async def admin_principal_disable(request: Request, name: str):
+        return await _admin_principal_action(request, name, disable=True)
+
+    @app.post("/admin/principals/{name}/enable", tags=["admin"], include_in_schema=False)
+    async def admin_principal_enable(request: Request, name: str):
+        return await _admin_principal_action(request, name, disable=False)
+
+    async def _admin_principal_action(request: Request, name: str, *, disable: bool):
+        if not _has_admin_session(request):
+            raise HTTPException(403, "admin session required")
+        form = await request.form()
+        ref = _csrf_mod.REF_PRINCIPAL_DISABLE if disable else _csrf_mod.REF_PRINCIPAL_ENABLE
+        _check_csrf(request, _admin_csrf_sid(request), ref, str(form.get(_csrf_mod.FIELD, "")))
+        if not _use_db or _db_principals is None:
+            raise HTTPException(501, "principals require a database backend")
+        async with _audit_txn(
+            AuditAction.admin_settings_update,
+            "admin-ui",
+            name,
+            f"principal {'disabled' if disable else 'enabled'}",
+        ):
+            await _db_principals.set_disabled(name, disable)
+        if disable:
+            principal = await _db_principals.by_name(name)
+            if principal is not None:
+                await _db_sessions.revoke_all_for_principal(principal.id)
+        return RedirectResponse("/admin/principals", status_code=303)
+
+    @app.post("/admin/principals/{name}/revoke-sessions", tags=["admin"], include_in_schema=False)
+    async def admin_principal_revoke_sessions(request: Request, name: str):
+        if not _has_admin_session(request):
+            raise HTTPException(403, "admin session required")
+        form = await request.form()
+        _check_csrf(
+            request,
+            _admin_csrf_sid(request),
+            _csrf_mod.REF_PRINCIPAL_REVOKE_SESSIONS,
+            str(form.get(_csrf_mod.FIELD, "")),
+        )
+        if not _use_db or _db_principals is None:
+            raise HTTPException(501, "principals require a database backend")
+        principal = await _db_principals.by_name(name)
+        if principal is not None:
+            await _db_sessions.revoke_all_for_principal(principal.id)
+        return RedirectResponse("/admin/principals", status_code=303)
+
+    # ── Account (self-service) ──────────────────────────────
+    #
+    # The first non-admin authenticated surface.  Everything here is guarded by
+    # the cvcpkg_session cookie, which is SEPARATE from cvcpkg_admin_session:
+    # the admin cookie, _has_admin_session and the `role != "admin"` gate on
+    # the dashboard are deliberately untouched, so an admin sees no behavioural
+    # change and a publisher cannot reach /admin by holding a session.
+
+    def _session_key() -> bytes:
+        state = _get_state()
+        return getattr(getattr(state, "tokens", None), "_hmac_key", b"") or _fallback_state_key()
+
+    async def _current_session(request: Request):
+        """Resolve the caller's session, or None.
+
+        The cookie is a reference: the row is re-read and the principal
+        re-checked on every request, which is what makes signing out and
+        disabling a principal take effect immediately.
+        """
+        if not _use_db or _db_sessions is None:
+            return None
+        raw = request.cookies.get(_sessions_mod.COOKIE_NAME, "")
+        if not raw:
+            return None
+        return await _db_sessions.resolve(raw)
+
+    def _admin_csrf_sid(request: Request) -> str:
+        """A stable CSRF binding for the admin cookie, which carries no id.
+
+        The dashboard session is a signed ``<exp>.<hmac>`` pair with no session
+        row behind it, so there is nothing to key a CSRF token on.  Hashing the
+        cookie value gives a per-session, per-browser binding without putting
+        the cookie itself into page HTML.
+        """
+        raw = request.cookies.get(admin_ui._SESSION_COOKIE, "")
+        return hashlib.sha256(raw.encode()).hexdigest()[:32] if raw else ""
+
+    def _csrf_for(sid: str):
+        key = _session_key()
+        return lambda ref: _csrf_mod.issue(key, sid, ref)
+
+    def _check_csrf(request: Request, sid: str, ref: str, presented: str) -> None:
+        """Refuse a cookie-authenticated mutation without a valid form token.
+
+        Only cookie-authenticated requests are checked: a browser never
+        attaches Authorization on its own, so a bearer API call is not
+        reachable by CSRF and must not be asked for a token it cannot obtain.
+        """
+        if not _csrf_mod.origin_ok(request, public_url=os.environ.get("CVCPKG_PUBLIC_URL", "")):
+            raise HTTPException(403, "cross-origin request refused")
+        if not _csrf_mod.check(_session_key(), sid, ref, presented or ""):
+            raise HTTPException(403, "invalid or missing CSRF token")
+
+    def _require_db_account():
+        if not _use_db:
+            raise HTTPException(501, "accounts require a database backend")
+
+    def _safe_next(value: str) -> str:
+        """Only two destinations are ever redirect targets after sign-in."""
+        return value if value in ("/account", "/admin") else "/account"
+
+    async def _role_for_principal(principal) -> str:
+        return str(principal.last_role or "reader")
+
+    async def _member_orgs(name: str) -> list[str]:
+        if not _use_db or _db_orgs is None:
+            return []
+        try:
+            orgs = await _db_orgs.list_orgs(caller_token_name=name)
+        except Exception:
+            return []
+        out = []
+        for o in orgs or []:
+            slug = getattr(o, "slug", None)
+            if slug and await _db_orgs.is_member(slug, name):
+                out.append(slug)
+        return out
+
+    @app.get("/login", response_class=HTMLResponse, include_in_schema=False)
+    async def login_page(request: Request, next: str = "/account"):
+        from cvcpkg.server import account_ui
+
+        _require_db_account()
+        if await _current_session(request) is not None:
+            return RedirectResponse(_safe_next(next), status_code=303)
+        return HTMLResponse(
+            account_ui.login_html(oidc_enabled=_oidc_enabled(), next_url=_safe_next(next))
+        )
+
+    @app.post("/login", response_class=HTMLResponse, include_in_schema=False)
+    async def login_submit(request: Request, token: str = Form(""), next: str = Form("/account")):
+        """Exchange an API token for a browser session.
+
+        This is the break-glass path and the only one available when no IdP is
+        configured.  A session minted this way is bound to a *local* principal,
+        which may not mint further tokens — otherwise a leaked reader token
+        could be laundered into a fresh long-lived credential.
+        """
+        from cvcpkg.server import account_ui
+
+        _require_db_account()
+        _check_rate_limit(request)
+        dest = _safe_next(next)
+
+        record = await _db_tokens.verify(token) if token else None
+        if record is None or record.via_previous_hash:
+            return HTMLResponse(
+                account_ui.login_html(
+                    oidc_enabled=_oidc_enabled(),
+                    next_url=dest,
+                    error="Invalid token.",
+                ),
+                status_code=401,
+            )
+
+        principal, _changed = await _db_principals.upsert_from_claims(
+            "local",
+            f"token:{record.name}",
+            {"preferred_username": record.name, "email": record.email, "sub": record.name},
+            record.role.value,
+        )
+        cookie = await _db_sessions.mint(
+            principal,
+            record.role.value,
+            ttl_seconds=admin_ui._session_ttl_seconds(),
+            device_label=(request.headers.get("user-agent") or "")[:128],
+            ip=(request.client.host if request.client else ""),
+        )
+        if _use_db and _db_audit is not None:
+            await _db_audit.record(
+                action=AuditAction.login,
+                actor=principal.name,
+                target="account",
+                detail="session from API token",
+            )
+        resp = RedirectResponse(dest, status_code=303)
+        resp.set_cookie(
+            _sessions_mod.COOKIE_NAME,
+            cookie,
+            max_age=admin_ui._session_ttl_seconds(),
+            **admin_ui.session_cookie_kwargs(path="/", request=request),
+        )
+        return resp
+
+    @app.post("/logout", include_in_schema=False)
+    async def logout(request: Request):
+        resolved = await _current_session(request)
+        if resolved is not None:
+            row, principal = resolved
+            form = await request.form()
+            _check_csrf(
+                request, str(row.id), _csrf_mod.REF_LOGOUT, str(form.get(_csrf_mod.FIELD, ""))
+            )
+            await _db_sessions.revoke(row.id, principal_id=principal.id)
+            if _use_db and _db_audit is not None:
+                await _db_audit.record(
+                    action=AuditAction.logout,
+                    actor=principal.name,
+                    target="account",
+                    detail="signed out",
+                )
+        resp = RedirectResponse("/", status_code=303)
+        resp.delete_cookie(_sessions_mod.COOKIE_NAME, path="/")
+        resp.delete_cookie(admin_ui._SESSION_COOKIE, path="/admin")
+        return resp
+
+    @app.get("/account", response_class=HTMLResponse, include_in_schema=False)
+    async def account_page(request: Request):
+        from cvcpkg.server import account_ui
+
+        _require_db_account()
+        resolved = await _current_session(request)
+        if resolved is None:
+            return RedirectResponse("/login?next=/account", status_code=303)
+        row, principal = resolved
+
+        role = await _role_for_principal(principal)
+        cfg = _OidcConfig.from_env()
+        if principal.issuer == "local":
+            reason = "Inherited from the API token you signed in with."
+        elif cfg.default_role and role == cfg.default_role:
+            reason = (
+                "Server default for an authenticated user who matches no group "
+                "(CVCPKG_OIDC_DEFAULT_ROLE)."
+            )
+        else:
+            reason = "Granted by your group membership at the identity provider."
+
+        tokens = [
+            t
+            for t in await _db_tokens.list_tokens()
+            if getattr(t, "principal_id", None) == principal.id and not t.revoked
+        ]
+        sessions = await _db_sessions.list_for_principal(principal.id)
+        orgs = await _member_orgs(principal.name)
+        can_rename = not tokens and not orgs
+        local = principal.issuer == "local"
+
+        resp = HTMLResponse(
+            account_ui.account_html(
+                principal=principal,
+                role=role,
+                role_reason=reason,
+                session_row=row,
+                sessions=sessions,
+                tokens=tokens,
+                orgs=orgs,
+                csrf_for=_csrf_for(str(row.id)),
+                flash=account_ui.take_flash(str(row.id)),
+                can_rename=can_rename,
+                can_mint=not local,
+                mint_disabled_reason=(
+                    "Self-service tokens require signing in with the identity provider."
+                    if local
+                    else ""
+                ),
+            )
+        )
+        resp.headers["Cache-Control"] = "no-store"
+        return resp
+
+    @app.post("/account/tokens", include_in_schema=False)
+    async def account_mint_token(
+        request: Request,
+        label: str = Form(""),
+        role: str = Form("publisher"),
+        expires_in_days: int = Form(90),
+    ):
+        from cvcpkg.server import account_ui
+
+        _require_db_account()
+        resolved = await _current_session(request)
+        if resolved is None:
+            return RedirectResponse("/login?next=/account", status_code=303)
+        row, principal = resolved
+        form = await request.form()
+        _check_csrf(
+            request, str(row.id), _csrf_mod.REF_ACCOUNT_MINT, str(form.get(_csrf_mod.FIELD, ""))
+        )
+
+        if principal.issuer == "local":
+            raise HTTPException(403, "self-service tokens require an identity-provider session")
+        if not _principals_mod.validate_label(label):
+            account_ui.put_flash(
+                str(row.id),
+                "is-danger is-light",
+                "Label must be lowercase letters, digits or hyphens (max 31 characters).",
+            )
+            return RedirectResponse("/account", status_code=303)
+
+        ceiling = TokenRole(await _role_for_principal(principal))
+        try:
+            wanted = TokenRole(role)
+        except ValueError:
+            raise HTTPException(422, f"unknown role: {role}") from None
+        effective = _principals_mod.min_role(wanted, ceiling)
+        if effective != wanted:
+            account_ui.put_flash(
+                str(row.id),
+                "is-danger is-light",
+                f"You cannot create a {_esc_role(wanted)} token; "
+                f"your role is {_esc_role(ceiling)}.",
+            )
+            return RedirectResponse("/account", status_code=303)
+
+        name = _principals_mod.token_name_for(principal.name, label)
+        try:
+            async with _audit_txn(
+                AuditAction.token_create,
+                principal.name,
+                name,
+                f"role={effective.value} via /account",
+            ):
+                raw = await _db_tokens.create(
+                    name,
+                    effective,
+                    expires_in_days=max(1, min(365, int(expires_in_days))),
+                    email=principal.email,
+                    principal_id=principal.id,
+                )
+        except ValueError as exc:
+            account_ui.put_flash(str(row.id), "is-danger is-light", _esc_text(str(exc)))
+            return RedirectResponse("/account", status_code=303)
+
+        account_ui.put_flash(str(row.id), "is-success", account_ui.minted_flash_html(name, raw))
+        resp = RedirectResponse("/account", status_code=303)
+        resp.headers["Cache-Control"] = "no-store"
+        return resp
+
+    @app.post("/account/tokens/revoke", include_in_schema=False)
+    async def account_revoke_token(request: Request, name: str = Form("")):
+        _require_db_account()
+        resolved = await _current_session(request)
+        if resolved is None:
+            return RedirectResponse("/login?next=/account", status_code=303)
+        row, principal = resolved
+        form = await request.form()
+        _check_csrf(
+            request, str(row.id), _csrf_mod.REF_ACCOUNT_REVOKE, str(form.get(_csrf_mod.FIELD, ""))
+        )
+
+        owned = [
+            t
+            for t in await _db_tokens.list_tokens()
+            if t.name == name and getattr(t, "principal_id", None) == principal.id
+        ]
+        # 404, not 403: do not confirm that another principal's token exists.
+        if not owned:
+            raise HTTPException(404, "no such token")
+        async with _audit_txn(AuditAction.token_revoke, principal.name, name, "via /account"):
+            await _db_tokens.revoke(name)
+        return RedirectResponse("/account", status_code=303)
+
+    @app.post("/account/rename", include_in_schema=False)
+    async def account_rename(request: Request, name: str = Form("")):
+        from cvcpkg.server import account_ui
+
+        _require_db_account()
+        resolved = await _current_session(request)
+        if resolved is None:
+            return RedirectResponse("/login?next=/account", status_code=303)
+        row, principal = resolved
+        form = await request.form()
+        _check_csrf(
+            request, str(row.id), _csrf_mod.REF_ACCOUNT_RENAME, str(form.get(_csrf_mod.FIELD, ""))
+        )
+
+        tokens = [
+            t
+            for t in await _db_tokens.list_tokens()
+            if getattr(t, "principal_id", None) == principal.id and not t.revoked
+        ]
+        if tokens or await _member_orgs(principal.name):
+            account_ui.put_flash(
+                str(row.id),
+                "is-danger is-light",
+                "This handle is already in use and can no longer be renamed.",
+            )
+            return RedirectResponse("/account", status_code=303)
+
+        if not await _db_principals.rename(principal.id, name.strip()):
+            account_ui.put_flash(str(row.id), "is-danger is-light", "That handle is not available.")
+        return RedirectResponse("/account", status_code=303)
+
+    @app.post("/account/sessions/{sid}/revoke", include_in_schema=False)
+    async def account_revoke_session(request: Request, sid: int):
+        _require_db_account()
+        resolved = await _current_session(request)
+        if resolved is None:
+            return RedirectResponse("/login?next=/account", status_code=303)
+        row, principal = resolved
+        form = await request.form()
+        _check_csrf(
+            request, str(row.id), _csrf_mod.REF_SESSION_REVOKE, str(form.get(_csrf_mod.FIELD, ""))
+        )
+        await _db_sessions.revoke(sid, principal_id=principal.id)
+        return RedirectResponse("/account", status_code=303)
+
+    @app.post("/account/sessions/revoke-all", include_in_schema=False)
+    async def account_revoke_all_sessions(request: Request):
+        _require_db_account()
+        resolved = await _current_session(request)
+        if resolved is None:
+            return RedirectResponse("/login?next=/account", status_code=303)
+        row, principal = resolved
+        form = await request.form()
+        _check_csrf(
+            request,
+            str(row.id),
+            _csrf_mod.REF_SESSION_REVOKE_ALL,
+            str(form.get(_csrf_mod.FIELD, "")),
+        )
+        await _db_sessions.revoke_all_for_principal(principal.id, except_session_id=row.id)
+        return RedirectResponse("/account", status_code=303)
 
     # ── Tag HTML pages ──────────────────────────────────────
 
