@@ -484,3 +484,148 @@ class TestAdminPostsAreCsrfProtected:
             headers={"Origin": "https://evil.test"},
         )
         assert r.status_code == 403
+
+
+class TestOwnershipPredicatesActuallyWork:
+    """Regression tests for a seam that was dead while every test stayed green.
+
+    ``list_tokens()`` built each ``TokenRecord`` without ``principal_id``, so it
+    defaulted to None and every "is this token mine?" filter matched nothing:
+    the account token table was always empty, self-service revoke always 404'd,
+    and — worst — ``can_rename`` was permanently True, so a principal could
+    rename away from a handle that already owned packages and org memberships
+    and let the freed handle be allotted to a different person.
+
+    The original mint test missed all of this because it asserted on the flash
+    banner, which contains the token NAME. These assert on the table.
+    """
+
+    def _mint(self, client, label="laptop", role="publisher"):
+        page = client.get("/account").text
+        return client.post(
+            "/account/tokens",
+            data={
+                "label": label,
+                "role": role,
+                "expires_in_days": "90",
+                "_csrf": _form_csrf(page, "/account/tokens"),
+            },
+            follow_redirects=False,
+        )
+
+    def test_a_minted_token_appears_in_the_token_table(self, sso_server):
+        client, _, _ = sso_server
+        _sign_in(client)
+        self._mint(client)
+        # Read a page with no flash on it, so the banner cannot supply the name.
+        client.get("/account")
+        page = client.get("/account").text
+        table = page.split("API tokens", 1)[1]
+        assert "pubber.laptop" in table, "token table is empty — ownership filter is dead"
+
+    def test_revoking_your_own_token_works(self, sso_server):
+        client, _, _ = sso_server
+        _sign_in(client)
+        self._mint(client)
+        client.get("/account")
+        page = client.get("/account").text
+        r = client.post(
+            "/account/tokens/revoke",
+            data={
+                "name": "pubber.laptop",
+                "_csrf": _form_csrf(page, "/account/tokens/revoke"),
+            },
+            follow_redirects=False,
+        )
+        assert r.status_code == 303, r.text
+        assert "pubber.laptop" not in client.get("/account").text.split("API tokens", 1)[1]
+
+    def test_rename_is_refused_once_a_token_exists(self, sso_server):
+        """The guard that stops a handle being freed while it still owns things."""
+        client, _, _ = sso_server
+        _sign_in(client)
+        self._mint(client)
+        client.get("/account")
+        page = client.get("/account").text
+        # With a live token the rename form must not even be offered.
+        assert "/account/rename" not in page
+
+    def test_rename_is_refused_server_side_even_if_the_form_is_forged(self, sso_server):
+        client, _, _ = sso_server
+        _sign_in(client)
+        page_before = client.get("/account").text
+        tok = _form_csrf(page_before, "/account/rename")  # offered while unused
+        self._mint(client)
+        client.get("/account")
+        r = client.post(
+            "/account/rename", data={"name": "someoneelse", "_csrf": tok}, follow_redirects=False
+        )
+        assert r.status_code == 303
+        assert "already in use" in client.get("/account").text
+        assert "pubber" in client.get("/account").text
+
+    def test_org_membership_is_reported(self, sso_server):
+        """_member_orgs iterated a (rows, total) tuple and always returned []."""
+        client, _, tmp_path = sso_server
+        _sign_in(client)
+
+        from cvcpkg.server.db_stores import DbOrgStore
+
+        async def make_org():
+            orgs = DbOrgStore()
+            await orgs.create(slug="cvc", display_name="CVC", created_by="admin")
+            await orgs.add_member("cvc", "pubber")
+
+        asyncio.run(make_org())
+        assert "cvc" in client.get("/account").text
+
+
+class TestDisabledPrincipalCannotSignIn:
+    def test_oidc_login_is_refused_for_a_disabled_principal(self, sso_server):
+        """Otherwise a disabled admin gets the dashboard back and can re-enable itself."""
+        client, _, _ = sso_server
+        _sign_in(client)
+
+        from cvcpkg.server.identities import DbPrincipalStore
+
+        async def disable():
+            await DbPrincipalStore().set_disabled("pubber", True)
+
+        asyncio.run(disable())
+
+        from urllib.parse import parse_qs, urlparse
+
+        r = client.get("/auth/oidc/login?next=/account", follow_redirects=False)
+        sent = parse_qs(urlparse(r.headers["location"]).query)["state"][0]
+        r = client.get(f"/auth/oidc/callback?code=x&state={sent}", follow_redirects=False)
+        assert r.status_code == 403, r.text
+        assert "disabled" in r.text.lower()
+        assert "cvcpkg_session" not in r.cookies
+        assert "cvcpkg_admin_session" not in r.cookies
+
+
+class TestGroupsClaimDefault:
+    """An env var that is PRESENT BUT EMPTY must fall back to the default.
+
+    docker compose's `environment:` mapping sets the key, so an unset variable
+    arrives as "" rather than absent — and `os.environ.get(k, "groups")` then
+    returns "". With groups_claim == "" the lookup is claims.get(""), which
+    matches nothing, so every group mapping fails silently and every user drops
+    to the default role. The login still succeeds and the documented ship-gate
+    check still passes, which is what makes it dangerous.
+    """
+
+    def test_empty_groups_claim_falls_back(self, monkeypatch):
+        from cvcpkg.server.oidc import OidcConfig, map_claims_to_role
+
+        monkeypatch.setenv("CVCPKG_OIDC_GROUPS_CLAIM", "")
+        monkeypatch.setenv("CVCPKG_OIDC_ADMIN_GROUPS", "cvcpkg-admin")
+        cfg = OidcConfig.from_env()
+        assert cfg.groups_claim == "groups"
+        assert map_claims_to_role({"groups": ["cvcpkg-admin"]}, cfg) == "admin"
+
+    def test_empty_scopes_falls_back(self, monkeypatch):
+        from cvcpkg.server.oidc import OidcConfig
+
+        monkeypatch.setenv("CVCPKG_OIDC_SCOPES", "")
+        assert OidcConfig.from_env().scopes == "openid email profile"

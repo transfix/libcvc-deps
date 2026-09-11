@@ -494,6 +494,46 @@ class DbTokenStore:
             )
             return result.scalar() or 0
 
+    async def tokens_for_principal(self, principal_id: int) -> list[TokenRecord]:
+        """Live tokens belonging to one principal, filtered in SQL.
+
+        The account page and the admin principals page both need this; doing it
+        by scanning list_tokens() in Python made the latter O(principals x
+        tokens).
+        """
+        async with get_session() as session:
+            rows = (
+                (
+                    await session.execute(
+                        select(TokenRow)
+                        .where(
+                            TokenRow.principal_id == principal_id,
+                            TokenRow.revoked == False,  # noqa: E712
+                        )
+                        .order_by(TokenRow.created_at)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            return [
+                TokenRecord(
+                    name=r.name,
+                    role=TokenRole(r.role),
+                    token_hash=r.token_hash,
+                    email=r.email,
+                    description=r.description,
+                    metadata=r.user_metadata,
+                    created_at=r.created_at,
+                    expires_at=_ensure_aware(r.expires_at),
+                    revoked=r.revoked,
+                    principal_id=r.principal_id,
+                    previous_token_hash=r.previous_token_hash or "",
+                    previous_hash_expires_at=_ensure_aware(r.previous_hash_expires_at),
+                )
+                for r in rows
+            ]
+
     async def list_tokens(self) -> list[TokenRecord]:
         async with get_session() as session:
             result = await session.execute(select(TokenRow).order_by(TokenRow.created_at))
@@ -508,6 +548,14 @@ class DbTokenStore:
                     created_at=row.created_at,
                     expires_at=row.expires_at,
                     revoked=row.revoked,
+                    # Carried so callers can tell WHOSE token this is.  Omitting
+                    # principal_id left it defaulting to None on every record,
+                    # which silently emptied every "my tokens" filter built on
+                    # it — including the guard that decides whether a handle may
+                    # still be renamed.
+                    principal_id=row.principal_id,
+                    previous_token_hash=row.previous_token_hash or "",
+                    previous_hash_expires_at=_ensure_aware(row.previous_hash_expires_at),
                 )
                 for row in result.scalars().all()
             ]

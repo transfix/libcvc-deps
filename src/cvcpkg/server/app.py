@@ -6291,6 +6291,27 @@ def create_app(
             principal, email_changed = await _db_principals.upsert_from_claims(
                 cfg.issuer, str(claims.get("sub") or subject), claims, role
             )
+            # Refuse here, ahead of the audit row, the session mint and BOTH
+            # cookies.  Without this a disabled principal completes the login:
+            # a non-admin loops silently between /account and /login with a
+            # success row in the audit log, and a disabled ADMIN gets the
+            # dashboard back — the admin cookie is subject-less, so nothing
+            # downstream rechecks — and can re-enable themselves.
+            if principal.disabled:
+                if _db_audit is not None:
+                    await _db_audit.record(
+                        action=AuditAction.login,
+                        actor=principal.name,
+                        target="account",
+                        detail=f"OIDC login REFUSED: principal disabled (role={role})",
+                    )
+                return HTMLResponse(
+                    admin_ui.login_html(
+                        error="This account has been disabled.",
+                        oidc_enabled=_oidc_enabled(),
+                    ),
+                    status_code=403,
+                )
             if _db_audit is not None:
                 await _db_audit.record(
                     action=AuditAction.login,
@@ -6659,7 +6680,6 @@ def create_app(
                 status_code=501,
             )
         people = await _db_principals.list_all(q=q)
-        all_tokens = await _db_tokens.list_tokens()
         rows = []
         for p in people:
             rows.append(
@@ -6674,11 +6694,7 @@ def create_app(
                     "last_role": p.last_role,
                     "disabled": p.disabled,
                     "sessions": await _db_sessions.count_active_for_principal(p.id),
-                    "tokens": sum(
-                        1
-                        for t in all_tokens
-                        if getattr(t, "principal_id", None) == p.id and not t.revoked
-                    ),
+                    "tokens": len(await _db_tokens.tokens_for_principal(p.id)),
                 }
             )
         return HTMLResponse(
@@ -6717,6 +6733,17 @@ def create_app(
             principal = await _db_principals.by_name(name)
             if principal is not None:
                 await _db_sessions.revoke_all_for_principal(principal.id)
+                # Their delegated tokens stop verifying immediately (verify()
+                # rechecks the principal) and their user sessions are gone.  An
+                # already-issued cvcpkg_admin_session cookie is subject-less and
+                # cannot be revoked individually; it dies at its own TTL.  For
+                # an admin being offboarded, rotate the server HMAC key or wait
+                # out CVCPKG_SESSION_TTL_SECONDS.
+                logger.warning(
+                    "principal %s disabled; any existing admin cookie remains "
+                    "valid until it expires",
+                    name,
+                )
         return RedirectResponse("/admin/principals", status_code=303)
 
     @app.post("/admin/principals/{name}/revoke-sessions", tags=["admin"], include_in_schema=False)
@@ -6802,18 +6829,16 @@ def create_app(
         return str(principal.last_role or "reader")
 
     async def _member_orgs(name: str) -> list[str]:
+        """Org slugs *name* belongs to.
+
+        Uses member_org_slugs rather than list_orgs: the latter returns a
+        ``(rows, total)`` tuple and is paginated at 100, so filtering it here
+        both missed members past the first page and — when the tuple was
+        iterated rather than unpacked — returned nothing at all.
+        """
         if not _use_db or _db_orgs is None:
             return []
-        try:
-            orgs = await _db_orgs.list_orgs(caller_token_name=name)
-        except Exception:
-            return []
-        out = []
-        for o in orgs or []:
-            slug = getattr(o, "slug", None)
-            if slug and await _db_orgs.is_member(slug, name):
-                out.append(slug)
-        return out
+        return sorted(await _db_orgs.member_org_slugs(name))
 
     @app.get("/login", response_class=HTMLResponse, include_in_schema=False)
     async def login_page(request: Request, next: str = "/account"):
@@ -6858,6 +6883,15 @@ def create_app(
             {"preferred_username": record.name, "email": record.email, "sub": record.name},
             record.role.value,
         )
+        if principal.disabled:
+            return HTMLResponse(
+                account_ui.login_html(
+                    oidc_enabled=_oidc_enabled(),
+                    next_url=dest,
+                    error="This account has been disabled.",
+                ),
+                status_code=403,
+            )
         cookie = await _db_sessions.mint(
             principal,
             record.role.value,
@@ -6925,11 +6959,7 @@ def create_app(
         else:
             reason = "Granted by your group membership at the identity provider."
 
-        tokens = [
-            t
-            for t in await _db_tokens.list_tokens()
-            if getattr(t, "principal_id", None) == principal.id and not t.revoked
-        ]
+        tokens = await _db_tokens.tokens_for_principal(principal.id)
         sessions = await _db_sessions.list_for_principal(principal.id)
         orgs = await _member_orgs(principal.name)
         can_rename = not tokens and not orgs
@@ -7038,11 +7068,7 @@ def create_app(
             request, str(row.id), _csrf_mod.REF_ACCOUNT_REVOKE, str(form.get(_csrf_mod.FIELD, ""))
         )
 
-        owned = [
-            t
-            for t in await _db_tokens.list_tokens()
-            if t.name == name and getattr(t, "principal_id", None) == principal.id
-        ]
+        owned = [t for t in await _db_tokens.tokens_for_principal(principal.id) if t.name == name]
         # 404, not 403: do not confirm that another principal's token exists.
         if not owned:
             raise HTTPException(404, "no such token")
@@ -7064,11 +7090,7 @@ def create_app(
             request, str(row.id), _csrf_mod.REF_ACCOUNT_RENAME, str(form.get(_csrf_mod.FIELD, ""))
         )
 
-        tokens = [
-            t
-            for t in await _db_tokens.list_tokens()
-            if getattr(t, "principal_id", None) == principal.id and not t.revoked
-        ]
+        tokens = await _db_tokens.tokens_for_principal(principal.id)
         if tokens or await _member_orgs(principal.name):
             account_ui.put_flash(
                 str(row.id),
