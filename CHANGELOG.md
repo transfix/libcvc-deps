@@ -91,9 +91,16 @@ Security — name allocation is the boundary:
   principal re-checked on every request, which is what makes signing out end
   the session rather than merely asking the client to forget it.
 
-Known gap, tracked separately: the three pre-existing admin POSTs
-(`/admin/tokens/create`, `/admin/tokens/revoke`, `/admin/packages/action`)
-still have no CSRF protection beyond `SameSite=Lax`.
+Also fixed here: the three **pre-existing** admin POSTs
+(`/admin/tokens/create`, `/admin/tokens/revoke`, `/admin/packages/action`) had
+no CSRF protection at all. `SameSite=Lax` does stop a cross-site form POST in
+current browsers, but it is a browser-version-dependent mitigation that does
+not cover a same-site subdomain — and those three routes create credentials,
+revoke credentials and delete packages. They now carry and require a token on
+the same terms as the account surface. Since the admin cookie signs only an
+expiry and has no session id to key on, the binding is derived from a hash of
+the cookie value: per-session and per-browser, without putting the cookie
+itself into page HTML.
 
 
 ### Sign in with tx.wtf (OIDC) — server enablement

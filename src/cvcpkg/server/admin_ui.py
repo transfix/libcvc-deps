@@ -343,6 +343,17 @@ def dashboard_html(data: dict) -> str:
 # ── Management pages (increment 2) ──────────────────────────────
 
 
+def _csrf_field(csrf_for, ref: str) -> str:
+    """Hidden CSRF input for one form, or nothing when no issuer is supplied.
+
+    Optional so these renderers remain callable from contexts with no session.
+    Enforcement lives in the route handlers, never here.
+    """
+    if csrf_for is None:
+        return ""
+    return f'<input type="hidden" name="_csrf" value="{_esc(csrf_for(ref))}">'
+
+
 def _tabs(active: str) -> str:
     items = [
         ("Overview", "/admin"),
@@ -381,7 +392,7 @@ def _variant_fields(p: object) -> str:
     return fields
 
 
-def packages_html(pkgs: list, total: int, *, q: str = "", notice: str = "") -> str:
+def packages_html(pkgs: list, total: int, *, q: str = "", notice: str = "", csrf_for=None) -> str:
     notice_html = (
         f'<div class="notification is-success is-light">{_esc(notice)}</div>' if notice else ""
     )
@@ -391,14 +402,17 @@ def packages_html(pkgs: list, total: int, *, q: str = "", notice: str = "") -> s
         state = '<span class="tag is-warning">yanked</span>' if yanked else ""
         toggle_action = "unyank" if yanked else "yank"
         toggle_class = "is-success is-light" if yanked else "is-warning is-light"
+        csrf_input = _csrf_field(csrf_for, "admin-package-action")
         actions = (
             '<form method="post" action="/admin/packages/action" style="display:inline">'
+            f"{csrf_input}"
             f"{_variant_fields(p)}"
             f'<input type="hidden" name="action" value="{toggle_action}">'
             f'<button class="button is-small {toggle_class}" type="submit">'
             f"{toggle_action}</button></form> "
             '<form method="post" action="/admin/packages/action" style="display:inline" '
             "onsubmit=\"return confirm('Delete this variant permanently?')\">"
+            f"{csrf_input}"
             f"{_variant_fields(p)}"
             '<input type="hidden" name="action" value="delete">'
             '<button class="button is-small is-danger is-light" type="submit">delete</button>'
@@ -443,6 +457,7 @@ def tokens_html(
     *,
     new_token: tuple[str, str] | None = None,
     notice: str = "",
+    csrf_for=None,
     error: str = "",
 ) -> str:
     flash = ""
@@ -477,8 +492,9 @@ def tokens_html(
             revoke_btn = (
                 '<form method="post" action="/admin/tokens/revoke" style="display:inline" '
                 f"onsubmit=\"return confirm('Revoke token {tok_name}?')\">"
-                f'<input type="hidden" name="name" value="{tok_name}">'
-                '<button class="button is-small is-danger is-light" type="submit">'
+                + _csrf_field(csrf_for, "admin-token-revoke")
+                + f'<input type="hidden" name="name" value="{tok_name}">'
+                + '<button class="button is-small is-danger is-light" type="submit">'
                 "revoke</button></form>"
             )
         rows.append(
@@ -497,12 +513,14 @@ def tokens_html(
         )
     else:
         table = '<p class="cvc-muted">no tokens</p>'
+    csrf_create = _csrf_field(csrf_for, "admin-token-create")
     body = f"""
 {_tabs("tokens")}
 {flash}
 <div class="box">
   <h2 class="subtitle is-6">Create token</h2>
   <form method="post" action="/admin/tokens/create" class="field is-grouped">
+    {csrf_create}
     <div class="control is-expanded">
       <input class="input" type="text" name="name" placeholder="token name" required>
     </div>

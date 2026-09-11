@@ -6358,7 +6358,9 @@ def create_app(
         total = 0
         if _use_db and _db_packages is not None:
             pkgs, total = await _db_packages.get_bundles(search=q, include_yanked=True, limit=200)
-        return HTMLResponse(admin_ui.packages_html(pkgs, total, q=q))
+        return HTMLResponse(
+            admin_ui.packages_html(pkgs, total, q=q, csrf_for=_csrf_for(_admin_csrf_sid(request)))
+        )
 
     @app.post("/admin/packages/action", tags=["admin"])
     async def admin_packages_action(
@@ -6373,6 +6375,12 @@ def create_app(
     ):
         if not _has_admin_session(request):
             raise HTTPException(403, "admin session required")
+        _check_csrf(
+            request,
+            _admin_csrf_sid(request),
+            _csrf_mod.REF_ADMIN_PACKAGE_ACTION,
+            str((await request.form()).get(_csrf_mod.FIELD, "")),
+        )
         if not _use_db or _db_packages is None:
             raise HTTPException(503, "package management requires the database backend")
         if action not in ("yank", "unyank", "delete"):
@@ -6415,7 +6423,9 @@ def create_app(
         tokens: list = []
         if _use_db and _db_tokens is not None:
             tokens = await _db_tokens.list_tokens()
-        return HTMLResponse(admin_ui.tokens_html(tokens))
+        return HTMLResponse(
+            admin_ui.tokens_html(tokens, csrf_for=_csrf_for(_admin_csrf_sid(request)))
+        )
 
     @app.post("/admin/tokens/create", tags=["admin"], response_class=HTMLResponse)
     async def admin_tokens_create(
@@ -6427,6 +6437,12 @@ def create_app(
 
         if not _has_admin_session(request):
             raise HTTPException(403, "admin session required")
+        _check_csrf(
+            request,
+            _admin_csrf_sid(request),
+            _csrf_mod.REF_ADMIN_TOKEN_CREATE,
+            str((await request.form()).get(_csrf_mod.FIELD, "")),
+        )
         if not _use_db or _db_tokens is None:
             raise HTTPException(503, "token management requires the database backend")
         # The dashboard mint path applied only .strip(), while every other mint
@@ -6442,6 +6458,7 @@ def create_app(
                         "invalid token name: must start with a letter or underscore "
                         "and contain only letters, digits, underscores or hyphens."
                     ),
+                    csrf_for=_csrf_for(_admin_csrf_sid(request)),
                 ),
                 status_code=422,
             )
@@ -6461,16 +6478,32 @@ def create_app(
             # create (or its atomic audit) failed — nothing committed.
             tokens = await _db_tokens.list_tokens()
             return HTMLResponse(
-                admin_ui.tokens_html(tokens, error=f"create failed: {exc}"),
+                admin_ui.tokens_html(
+                    tokens,
+                    error=f"create failed: {exc}",
+                    csrf_for=_csrf_for(_admin_csrf_sid(request)),
+                ),
                 status_code=409,
             )
         tokens = await _db_tokens.list_tokens()
-        return HTMLResponse(admin_ui.tokens_html(tokens, new_token=(name.strip(), raw)))
+        return HTMLResponse(
+            admin_ui.tokens_html(
+                tokens,
+                new_token=(name.strip(), raw),
+                csrf_for=_csrf_for(_admin_csrf_sid(request)),
+            )
+        )
 
     @app.post("/admin/tokens/revoke", tags=["admin"])
     async def admin_tokens_revoke(request: Request, name: str = Form(...)):
         if not _has_admin_session(request):
             raise HTTPException(403, "admin session required")
+        _check_csrf(
+            request,
+            _admin_csrf_sid(request),
+            _csrf_mod.REF_ADMIN_TOKEN_REVOKE,
+            str((await request.form()).get(_csrf_mod.FIELD, "")),
+        )
         if not _use_db or _db_tokens is None:
             raise HTTPException(503, "token management requires the database backend")
         async with _audit_txn(AuditAction.token_revoke, "admin-ui", name, "via /admin") as ac:

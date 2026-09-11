@@ -401,3 +401,86 @@ class TestPureNaming:
     def test_min_role_clamps(self):
         assert principals.min_role(TokenRole.admin, TokenRole.reader) == TokenRole.reader
         assert principals.min_role(TokenRole.publisher, TokenRole.admin) == TokenRole.publisher
+
+
+class TestAdminPostsAreCsrfProtected:
+    """The dashboard's three mutating POSTs had no CSRF at all.
+
+    ``SameSite=Lax`` does stop a cross-site form POST in current browsers, but
+    it is a browser-version-dependent mitigation that does not cover a
+    same-site subdomain — and these three routes create credentials, revoke
+    credentials and delete packages. They are now token-protected like the
+    account surface.
+    """
+
+    @pytest.fixture()
+    def admin_client(self, tmp_path, monkeypatch):
+        db_url = f"sqlite+aiosqlite:///{tmp_path / 'adm.db'}"
+        monkeypatch.setenv("CVCPKG_DATABASE_URL", db_url)
+        monkeypatch.delenv("CVCPKG_MIRROR_MODE", raising=False)
+        monkeypatch.setenv("CVCPKG_COOKIE_SECURE", "0")
+
+        from cvcpkg.server.db import create_tables, dispose_engine, init_db
+        from cvcpkg.server.db_stores import DbTokenStore
+
+        async def _seed():
+            init_db(db_url)
+            await create_tables()
+            raw = await DbTokenStore(tmp_path).create("root-admin", TokenRole.admin)
+            await dispose_engine()
+            return raw
+
+        admin_token = asyncio.run(_seed())
+        app = create_app(state_dir=tmp_path)
+        with TestClient(app) as client:
+            client.post("/admin/login", data={"token": admin_token}, follow_redirects=False)
+            yield client
+
+    def test_token_create_renders_a_token(self, admin_client):
+        page = admin_client.get("/admin/tokens").text
+        assert _form_csrf(page, "/admin/tokens/create")
+
+    def test_token_create_without_a_token_is_refused(self, admin_client):
+        r = admin_client.post("/admin/tokens/create", data={"name": "sneaky", "role": "admin"})
+        assert r.status_code == 403
+        # And nothing was created.
+        assert "sneaky" not in admin_client.get("/admin/tokens").text
+
+    def test_token_create_with_a_valid_token_succeeds(self, admin_client):
+        page = admin_client.get("/admin/tokens").text
+        r = admin_client.post(
+            "/admin/tokens/create",
+            data={
+                "name": "legit",
+                "role": "reader",
+                "_csrf": _form_csrf(page, "/admin/tokens/create"),
+            },
+        )
+        assert r.status_code == 200, r.text
+        assert "legit" in r.text
+
+    def test_a_token_for_another_admin_form_is_refused(self, admin_client):
+        """Per-form binding holds on the dashboard too."""
+        page = admin_client.get("/admin/tokens").text
+        r = admin_client.post(
+            "/admin/tokens/create",
+            data={
+                "name": "sneaky2",
+                "role": "admin",
+                "_csrf": _form_csrf(page, "/admin/tokens/create")[::-1],
+            },
+        )
+        assert r.status_code == 403
+
+    def test_cross_origin_admin_post_is_refused(self, admin_client):
+        page = admin_client.get("/admin/tokens").text
+        r = admin_client.post(
+            "/admin/tokens/create",
+            data={
+                "name": "xorigin",
+                "role": "reader",
+                "_csrf": _form_csrf(page, "/admin/tokens/create"),
+            },
+            headers={"Origin": "https://evil.test"},
+        )
+        assert r.status_code == 403
