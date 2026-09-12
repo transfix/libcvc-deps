@@ -595,9 +595,7 @@ class TestMobileBadgeLayout:
         # be visible is deterministic without a network round-trip.
         page.goto(f"{SERVER_URL}/search")
         table = page.locator(".table-container")
-        page.wait_for_selector(
-            ".table-container", state="visible", timeout=JS_WAIT_TIMEOUT_MS
-        )
+        page.wait_for_selector(".table-container", state="visible", timeout=JS_WAIT_TIMEOUT_MS)
         assert table.is_visible()
 
 
