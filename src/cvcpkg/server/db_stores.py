@@ -494,6 +494,58 @@ class DbTokenStore:
             )
             return result.scalar() or 0
 
+    async def active_bare_by_name(self, name: str) -> bool:
+        """True if *name* is a live (non-revoked, unexpired) *machine* token.
+
+        "Bare" means ``principal_id IS NULL``.  A delegated token's row name
+        (``joe.laptop``) is deliberately excluded: such a token presents to
+        authorization as its principal (``joe``), so a membership keyed on
+        ``joe.laptop`` would match nothing.  A person is added to an org by
+        their principal name; only a machine token is added by its own name.
+        """
+        now = datetime.datetime.now(datetime.timezone.utc)
+        async with get_session() as session:
+            row = (
+                (
+                    await session.execute(
+                        select(TokenRow).where(
+                            TokenRow.name == name,
+                            TokenRow.revoked == False,  # noqa: E712
+                            TokenRow.principal_id.is_(None),
+                        )
+                    )
+                )
+                .scalars()
+                .first()
+            )
+            if row is None:
+                return False
+            exp = _ensure_aware(row.expires_at)
+            return exp is None or exp >= now
+
+    async def active_bare_names(self) -> set[str]:
+        """Names of all live machine tokens (``principal_id IS NULL``).
+
+        Used to classify org members for display: a member name is a *person*
+        (an SSO principal), a *token* (here), or an *orphan* (neither).
+        """
+        now = datetime.datetime.now(datetime.timezone.utc)
+        async with get_session() as session:
+            rows = (
+                await session.execute(
+                    select(TokenRow.name, TokenRow.expires_at).where(
+                        TokenRow.revoked == False,  # noqa: E712
+                        TokenRow.principal_id.is_(None),
+                    )
+                )
+            ).all()
+            out: set[str] = set()
+            for name, exp in rows:
+                e = _ensure_aware(exp)
+                if e is None or e >= now:
+                    out.add(str(name))
+            return out
+
     async def tokens_for_principal(self, principal_id: int) -> list[TokenRecord]:
         """Live tokens belonging to one principal, filtered in SQL.
 
