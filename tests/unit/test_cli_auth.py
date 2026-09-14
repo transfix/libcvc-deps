@@ -10,6 +10,11 @@ import hashlib
 
 import pytest
 
+# cli_auth.py lives under cvcpkg.server and imports the DB rows + auth -> models
+# -> pydantic, so it needs the server extras even for these pure-policy checks.
+pytest.importorskip("pydantic", reason="server extras not installed")
+pytest.importorskip("sqlalchemy", reason="server extras not installed")
+
 from cvcpkg.server import cli_auth
 
 

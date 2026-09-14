@@ -7,6 +7,10 @@ from __future__ import annotations
 
 import pytest
 
+# pairing.py lives under cvcpkg.server and imports auth -> models -> pydantic, so
+# it needs the server extras even though its logic is pure.
+pytest.importorskip("pydantic", reason="server extras not installed")
+
 from cvcpkg.server import pairing
 
 
