@@ -4,11 +4,30 @@ cvcpkg.org acts as a small first-party **authorization server** so interactive
 users can obtain a short-lived session instead of hand-cutting long-lived API
 tokens. Machines keep using `cvctok_` tokens, unchanged.
 
-> **Status.** The **server broker** described here is implemented (the
-> `/v1/auth/*` endpoints, the `/link` approval pages, and opaque `cvcses_`
-> sessions with rotating refresh). The cross-platform **CLI client**
-> (`cvcpkg login` / `whoami` / `auth …` and the `credentials.yaml` store) is the
-> remaining follow-up — see `docs/roadmap/txwtf-sso-and-cli-login.md` §5.4.
+## Using it
+
+```bash
+cvcpkg login                 # desktop: opens your browser (loopback)
+cvcpkg login --code          # headless/SSH: prints a code to approve in a browser
+cvcpkg login --role publisher --device catx-03
+cvcpkg whoami                # who am I, and which orgs
+cvcpkg auth devices          # list your active sessions
+cvcpkg auth revoke <id>      # revoke one session
+cvcpkg logout [--all]        # revoke server-side + forget locally
+cvcpkg auth status           # exit 0 iff a live session exists
+```
+
+After `cvcpkg login`, `cvcpkg search`/`install` against a **private** org just
+work: the stored session is attached (origin-scoped) for that server's host and
+auto-refreshed when the access token expires. Precedence is always
+`--token` > `CVCPKG_TOKEN` > the stored session, so CI is unaffected. On an
+SSH-only box, `cvcpkg login` (pairing) needs only outbound HTTPS; the credential
+lands on the remote box where the work runs.
+
+The client is **stdlib-only** at runtime (`http.server`, `webbrowser`,
+`urllib`) so it loads on Windows, macOS, Linux, OpenBSD and Haiku and in the
+single-binary build. Credentials live in `credentials.yaml` (0600) next to
+`registries.yaml`; `CVCPKG_CREDENTIALS_FILE` overrides the path.
 
 ## Credentials
 
