@@ -29,6 +29,7 @@ from urllib.parse import urlsplit
 
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 
 from cvcpkg.server.auth import derive_key
 from cvcpkg.server.db import (
@@ -229,13 +230,38 @@ class DbCliAuthStore:
             )
             return result.rowcount > 0
 
-    async def bump_slow_down(self, pairing_row_id: int) -> None:
+    async def note_poll(self, pairing_row_id: int) -> tuple[bool, int]:
+        """Record a device poll; return ``(too_fast, interval_to_report)``.
+
+        RFC 8628 §3.5: a poller faster than the current interval gets a
+        ``slow_down`` and the interval doubles (capped); otherwise the poll is
+        recorded and the steady interval returned.  The timestamp + interval
+        live on the row so the backoff survives across stateless poll requests.
+        """
+        from cvcpkg.server import pairing as _pairing
+
+        now = _now()
         async with atomic_session() as session:
-            await session.execute(
-                update(CliPairingRow)
-                .where(CliPairingRow.id == pairing_row_id)
-                .values(slow_down_strikes=CliPairingRow.slow_down_strikes + 1)
+            row = (
+                (
+                    await session.execute(
+                        select(CliPairingRow).where(CliPairingRow.id == pairing_row_id)
+                    )
+                )
+                .scalars()
+                .first()
             )
+            if row is None:
+                return False, _pairing.MIN_POLL_INTERVAL
+            interval = max(int(row.interval_seconds or 0), _pairing.MIN_POLL_INTERVAL)
+            last = _aware(row.last_poll_at)
+            too_fast = last is not None and (now - last).total_seconds() < interval
+            row.last_poll_at = now
+            if too_fast:
+                interval = _pairing.next_interval(interval, slow_down=True)
+                row.interval_seconds = interval
+                row.slow_down_strikes = int(row.slow_down_strikes or 0) + 1
+            return too_fast, interval
 
     # -- loopback authorization codes -----------------------------------
 
@@ -324,7 +350,12 @@ class DbCliAuthStore:
             )
 
     async def take_login_txn(self, txn_id: str) -> CliLoginTxnRow | None:
-        """Fetch-and-delete a parked transaction (single use)."""
+        """Fetch-and-delete a parked transaction, single-use under concurrency.
+
+        The DELETE is the gate: two concurrent resumes (double-click/refresh)
+        both SELECT the row, but only the DELETE that reports rowcount 1 wins and
+        returns it; the loser gets None instead of minting a second auth code.
+        """
         now = _now()
         async with atomic_session() as session:
             row = (
@@ -350,7 +381,11 @@ class DbCliAuthStore:
                 device_label=row.device_label,
                 expires_at=row.expires_at,
             )
-            await session.execute(sa_delete(CliLoginTxnRow).where(CliLoginTxnRow.id == row.id))
+            result = await session.execute(
+                sa_delete(CliLoginTxnRow).where(CliLoginTxnRow.id == row.id)
+            )
+            if result.rowcount != 1:
+                return None
             if expires_at is not None and expires_at < now:
                 return None
             return detached
@@ -375,32 +410,83 @@ class DbCliAuthStore:
             return locked is not None and locked > now
 
     async def record_failure(self, client_ip: str) -> None:
+        """Count one bad user-code attempt, atomically.
+
+        Uses DB-side UPDATEs rather than a read-modify-write so N parallel wrong
+        guesses advance the counter by N (no lost updates), and converts the
+        concurrent-first-failure PK race into an increment retry instead of a 500.
+        """
         now = _now()
+        ip = client_ip[:64]
+        cutoff = now - datetime.timedelta(seconds=CODE_ATTEMPT_WINDOW_SECONDS)
+        lock_until = now + datetime.timedelta(seconds=CODE_ATTEMPT_WINDOW_SECONDS)
         async with atomic_session() as session:
-            row = (
-                (
-                    await session.execute(
-                        select(CodeAttemptRow).where(CodeAttemptRow.client_ip == client_ip)
-                    )
-                )
-                .scalars()
-                .first()
+            # Atomic increment for a row whose window is still live.
+            live = await session.execute(
+                update(CodeAttemptRow)
+                .where(CodeAttemptRow.client_ip == ip, CodeAttemptRow.window_start > cutoff)
+                .values(failures=CodeAttemptRow.failures + 1)
             )
-            if row is None:
-                session.add(CodeAttemptRow(client_ip=client_ip[:64], window_start=now, failures=1))
+            if live.rowcount:
+                await session.execute(
+                    update(CodeAttemptRow)
+                    .where(
+                        CodeAttemptRow.client_ip == ip,
+                        CodeAttemptRow.failures >= MAX_CODE_FAILURES,
+                        CodeAttemptRow.locked_until.is_(None),
+                    )
+                    .values(locked_until=lock_until)
+                )
                 return
-            window_start = _aware(row.window_start) or now
-            if (now - window_start).total_seconds() > CODE_ATTEMPT_WINDOW_SECONDS:
-                row.window_start = now
-                row.failures = 1
-                row.locked_until = None
-            else:
-                row.failures += 1
-                if row.failures >= MAX_CODE_FAILURES:
-                    row.locked_until = now + datetime.timedelta(seconds=CODE_ATTEMPT_WINDOW_SECONDS)
+            # Window stale: reset it in place.
+            reset = await session.execute(
+                update(CodeAttemptRow)
+                .where(CodeAttemptRow.client_ip == ip)
+                .values(window_start=now, failures=1, locked_until=None)
+            )
+            if reset.rowcount:
+                return
+            # No row at all — insert; a concurrent insert loses the PK race, so
+            # convert that into an increment retry rather than a 500.
+            try:
+                session.add(CodeAttemptRow(client_ip=ip, window_start=now, failures=1))
+                await session.flush()
+            except IntegrityError:
+                await session.rollback()
+                await session.execute(
+                    update(CodeAttemptRow)
+                    .where(CodeAttemptRow.client_ip == ip)
+                    .values(failures=CodeAttemptRow.failures + 1)
+                )
 
     async def clear_failures(self, client_ip: str) -> None:
         async with atomic_session() as session:
             await session.execute(
                 sa_delete(CodeAttemptRow).where(CodeAttemptRow.client_ip == client_ip)
             )
+
+    async def reap_expired(self) -> int:
+        """Delete expired/consumed CLI-auth rows so the tables stay bounded.
+
+        Abandoned pairings, used or expired auth codes, never-resumed login
+        transactions, and stale brute-force counters accumulate otherwise; the
+        ``expires_at`` indexes exist precisely for this sweep.
+        """
+        now = _now()
+        cutoff = now - datetime.timedelta(seconds=CODE_ATTEMPT_WINDOW_SECONDS)
+        removed = 0
+        async with atomic_session() as session:
+            for stmt in (
+                sa_delete(CliPairingRow).where(CliPairingRow.expires_at < now),
+                sa_delete(CliAuthCodeRow).where(
+                    (CliAuthCodeRow.expires_at < now) | (CliAuthCodeRow.used == True)  # noqa: E712
+                ),
+                sa_delete(CliLoginTxnRow).where(CliLoginTxnRow.expires_at < now),
+                sa_delete(CodeAttemptRow).where(
+                    CodeAttemptRow.window_start < cutoff,
+                    (CodeAttemptRow.locked_until.is_(None)) | (CodeAttemptRow.locked_until < now),
+                ),
+            ):
+                result = await session.execute(stmt)
+                removed += int(result.rowcount or 0)
+        return removed

@@ -26,9 +26,10 @@ import datetime
 import hashlib
 import hmac
 import json
+import os
 from typing import NamedTuple
 
-from sqlalchemy import select, update
+from sqlalchemy import and_, delete, or_, select, update
 
 from cvcpkg.server.auth import derive_key
 from cvcpkg.server.db import PrincipalRow, SessionRow, atomic_session, get_session
@@ -54,6 +55,17 @@ class MintedSession(NamedTuple):
     max_lifetime_at: datetime.datetime
     principal_name: str
     role: str
+
+
+def _cli_max_role_ceiling():
+    """The CVCPKG_CLI_MAX_ROLE ceiling as a TokenRole (default admin)."""
+    from cvcpkg.server.models import TokenRole
+
+    val = (os.environ.get("CVCPKG_CLI_MAX_ROLE", "admin") or "admin").strip()
+    try:
+        return TokenRole(val)
+    except ValueError:
+        return TokenRole.admin
 
 
 def _b64url(raw: bytes) -> str:
@@ -253,7 +265,13 @@ class DbSessionStore:
             )
             if principal is None or principal.disabled:
                 return None
-            eff_role = min_role(TokenRole(row.role), TokenRole(principal.last_role))
+            # Clamp to BOTH the principal's current entitlement AND the CLI
+            # ceiling, so lowering CVCPKG_CLI_MAX_ROLE bounds live sessions on
+            # their next request, not just new grants.
+            eff_role = min_role(
+                min_role(TokenRole(row.role), TokenRole(principal.last_role)),
+                _cli_max_role_ceiling(),
+            )
             return TokenRecord(
                 name=principal.name,
                 role=eff_role,
@@ -446,3 +464,33 @@ class DbSessionStore:
 
     async def count_active_for_principal(self, principal_id: int) -> int:
         return len(await self.list_for_principal(principal_id))
+
+    async def expire_stale(self) -> int:
+        """Delete dead session rows so the table does not grow without bound.
+
+        A row is dead when it is revoked, past its hard reauth horizon, or its
+        access token has expired AND it has no still-valid refresh (so a live
+        CLI session mid-refresh-window is preserved; a browser cookie session,
+        which has no refresh, is removed once its access expires).
+        """
+        now = datetime.datetime.now(datetime.timezone.utc)
+        async with atomic_session() as session:
+            result = await session.execute(
+                delete(SessionRow).where(
+                    or_(
+                        SessionRow.revoked == True,  # noqa: E712
+                        and_(
+                            SessionRow.max_lifetime_at.is_not(None),
+                            SessionRow.max_lifetime_at < now,
+                        ),
+                        and_(
+                            SessionRow.expires_at < now,
+                            or_(
+                                SessionRow.refresh_expires_at.is_(None),
+                                SessionRow.refresh_expires_at < now,
+                            ),
+                        ),
+                    )
+                )
+            )
+            return int(result.rowcount or 0)

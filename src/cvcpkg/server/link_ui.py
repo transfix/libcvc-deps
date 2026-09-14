@@ -81,16 +81,21 @@ def confirm_html(
     allowed_roles: list[str],
     elapsed_seconds: int,
 ) -> str:
-    """The mandatory confirmation screen — who is asking, and for what."""
-    default_role = (
-        requested_role
-        if requested_role in allowed_roles
-        else (allowed_roles[0] if allowed_roles else "reader")
-    )
+    """The mandatory confirmation screen — who is asking, and for what.
+
+    Least privilege by default (roadmap §0/§9): the role selector always
+    pre-selects the **lowest** role the approver is entitled to, never the role
+    the *device* asked for — otherwise a socially-engineered admin could grant an
+    admin session in one click.  The device's request is shown read-only so the
+    human sees the ask but must deliberately raise the dropdown to honour it.
+    """
+    default_role = allowed_roles[0] if allowed_roles else "reader"
     options = "".join(
         f'<option value="{_esc(r)}"{" selected" if r == default_role else ""}>{_esc(r)}</option>'
         for r in allowed_roles
     )
+    asked = requested_role.strip() if requested_role else ""
+    asked_display = asked or "(unspecified — defaulting to lowest)"
     rows = "".join(
         f"<tr><td class='has-text-grey-light'>{_esc(k)}</td>"
         f"<td class='is-family-monospace'>{_esc(v)}</td></tr>"
@@ -99,6 +104,7 @@ def confirm_html(
             ("Platform", platform or "?"),
             ("CLI version", client_version or "?"),
             ("Request from", client_ip or "?"),
+            ("This device asked for", asked_display),
             ("Requested", f"{elapsed_seconds}s ago"),
             ("Code", user_code),
         )

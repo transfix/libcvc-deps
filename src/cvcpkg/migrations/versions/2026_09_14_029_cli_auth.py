@@ -86,6 +86,7 @@ def upgrade() -> None:
             ),
             sa.Column("interval_seconds", sa.Integer(), nullable=False, server_default="5"),
             sa.Column("slow_down_strikes", sa.Integer(), nullable=False, server_default="0"),
+            sa.Column("last_poll_at", sa.DateTime(timezone=True), nullable=True),
             sa.Column(
                 "created_at",
                 sa.DateTime(timezone=True),

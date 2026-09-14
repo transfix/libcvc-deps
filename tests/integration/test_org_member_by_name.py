@@ -108,6 +108,24 @@ def _members(client, token, slug):
     return {m["token_name"]: m for m in resp.json()["members"]}
 
 
+def _remove(client, token, slug, name):
+    return client.delete(
+        f"/v1/orgs/{slug}/members/{name}", headers={"Authorization": f"Bearer {token}"}
+    )
+
+
+class TestLastOwnerGuard:
+    def test_cannot_remove_the_last_owner(self, env):
+        client, admin, _ = env
+        _create_org(client, admin, "acme")  # admin ("test-admin") is auto-owner
+        # Removing the only owner is refused (409), keeping the org manageable.
+        assert _remove(client, admin, "acme", "test-admin").status_code == 409
+        # With a second owner, removing one is fine; the last is still guarded.
+        assert _add(client, admin, "acme", "reader-owner", role="owner").status_code == 200
+        assert _remove(client, admin, "acme", "test-admin").status_code == 200
+        assert _remove(client, admin, "acme", "reader-owner").status_code == 409
+
+
 class TestAddByName:
     def test_add_bare_token_auto(self, env):
         client, admin, _ = env

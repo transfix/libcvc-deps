@@ -714,6 +714,12 @@ def _extract_token(authorization: str | None = Header(None)) -> str | None:
     return None
 
 
+# Signals to a client (roadmap §5.3) that a *presented* credential failed to
+# verify — as opposed to being forbidden — so the CLI can transparently refresh
+# an expired ``cvcses_`` on a 401 instead of forcing a full re-login.
+_INVALID_TOKEN_HEADERS = {"WWW-Authenticate": 'Bearer realm="cvcpkg", error="invalid_token"'}
+
+
 def require_role(*roles: TokenRole, allow_grace: bool = False):
     """FastAPI dependency that requires one of the given roles.
 
@@ -734,7 +740,7 @@ def require_role(*roles: TokenRole, allow_grace: bool = False):
             raise HTTPException(401, "missing Authorization header")
         record = await _authenticate_token(raw)
         if record is None:
-            raise HTTPException(401, "invalid or expired token")
+            raise HTTPException(401, "invalid or expired token", headers=_INVALID_TOKEN_HEADERS)
         if record.role not in roles:
             raise HTTPException(
                 403,
@@ -761,7 +767,7 @@ async def optional_reader_auth(authorization: str | None = Header(None)) -> Toke
         raise HTTPException(401, "this server requires authentication for reads")
     record = await _authenticate_token(raw)
     if record is None:
-        raise HTTPException(401, "invalid or expired token")
+        raise HTTPException(401, "invalid or expired token", headers=_INVALID_TOKEN_HEADERS)
     return record
 
 
@@ -779,7 +785,7 @@ async def optional_token(authorization: str | None = Header(None)) -> TokenRecor
         return None
     record = await _authenticate_token(raw)
     if record is None and state.require_auth_for_reads:
-        raise HTTPException(401, "invalid or expired token")
+        raise HTTPException(401, "invalid or expired token", headers=_INVALID_TOKEN_HEADERS)
     return record
 
 
@@ -1160,6 +1166,8 @@ _LOG_GC_INTERVAL = int(os.environ.get("CVCPKG_LOG_GC_INTERVAL", "3600"))
 _YANK_RETENTION_DAYS = int(os.environ.get("CVCPKG_YANK_RETENTION_DAYS", "0"))
 # How often the yank retention GC runs (seconds, default 6 hours)
 _YANK_GC_INTERVAL = int(os.environ.get("CVCPKG_YANK_GC_INTERVAL", "21600"))
+# How often expired auth sessions + CLI-login rows are reaped (default 1 hour)
+_AUTH_GC_INTERVAL = int(os.environ.get("CVCPKG_AUTH_GC_INTERVAL", "3600"))
 
 
 def _satisfies_capabilities(builder, job) -> bool:
@@ -1457,6 +1465,32 @@ async def _build_scheduler_loop() -> None:
 
         except Exception:
             logger.exception("build scheduler loop error")
+
+
+async def _auth_gc_loop() -> None:
+    """Periodically reap expired browser/CLI sessions and CLI-login rows.
+
+    The auth tables (sessions, cli_pairings, cli_auth_codes, cli_login_txns,
+    code_attempts) only ever flip status in place otherwise, so without this
+    sweep they grow without bound on a busy server.
+    """
+    import asyncio
+
+    while True:
+        await asyncio.sleep(_AUTH_GC_INTERVAL)
+        if not _use_db or _db_sessions is None or _db_cli_auth is None:
+            continue
+        try:
+            purged_sessions = await _db_sessions.expire_stale()
+            purged_cli = await _db_cli_auth.reap_expired()
+            if purged_sessions or purged_cli:
+                logger.info(
+                    "auth GC: purged %d sessions, %d cli-auth rows",
+                    purged_sessions,
+                    purged_cli,
+                )
+        except Exception:
+            logger.exception("auth GC error")
 
 
 async def _log_retention_gc_loop() -> None:
@@ -2240,6 +2274,7 @@ def create_app(
             if _use_db and not MIRROR_MODE:
                 bg_tasks.append(asyncio.create_task(_mirror_health_loop()))
                 bg_tasks.append(asyncio.create_task(_build_scheduler_loop()))
+                bg_tasks.append(asyncio.create_task(_auth_gc_loop()))
                 if _LOG_RETENTION_DAYS > 0:
                     bg_tasks.append(asyncio.create_task(_log_retention_gc_loop()))
                 # Non-mirror only (the enclosing guard): a mirror may hold the
@@ -5890,7 +5925,9 @@ def create_app(
             try:
                 removed = await _db_orgs.remove_member(slug, token_name)
             except ValueError as exc:
-                raise HTTPException(404, str(exc)) from exc
+                # "last owner" is a conflict (409); a missing org is 404.
+                status = 409 if "last owner" in str(exc) else 404
+                raise HTTPException(status, str(exc)) from exc
             if not removed:
                 raise HTTPException(404, f"'{token_name}' is not a member of '{slug}'")
         return {"message": f"removed '{token_name}' from '{slug}'"}
@@ -6784,7 +6821,12 @@ def create_app(
                 status_code=403,
             )
         members = await _annotate_members(await _db_orgs.get_members(slug))
-        principals = [p.name for p in await _db_principals.list_all()] if _db_principals else []
+        # The autocomplete roster is a people-directory (roadmap §4.1/§6): only a
+        # global admin sees the full principal list. A plain org owner types the
+        # username, which _validate_new_member checks server-side.
+        principals: list[str] = []
+        if str(principal.last_role) == TokenRole.admin.value and _db_principals is not None:
+            principals = [p.name for p in await _db_principals.list_all()]
         csrf_for = _csrf_for(str(row.id))
         return HTMLResponse(
             org_manage_html(
@@ -6929,15 +6971,20 @@ def create_app(
         return _principals_mod.min_role(base, cap)
 
     def _clamp_cli_role(requested: str, principal_role: str) -> TokenRole:
-        """Never widen: the effective role is the requested one, capped."""
-        ceiling = _cli_ceiling(principal_role)
+        """Least privilege by default (roadmap §0/§9).
+
+        An unspecified or unrecognised role yields the **floor** (``reader``),
+        never the ceiling — a bare ``cvcpkg login`` must not silently mint an
+        admin session for an admin-entitled principal.  An explicit role is
+        honoured but only ever *narrowed* to the principal's ceiling.
+        """
         if not requested:
-            return ceiling
+            return TokenRole.reader
         try:
             want = TokenRole(requested)
         except ValueError:
-            return ceiling
-        return _principals_mod.min_role(want, ceiling)
+            return TokenRole.reader
+        return _principals_mod.min_role(want, _cli_ceiling(principal_role))
 
     def _allowed_cli_roles(principal_role: str) -> list[str]:
         ceiling = _cli_ceiling(principal_role)
@@ -7009,22 +7056,24 @@ def create_app(
     async def auth_device_token(body: DevicePollRequest):
         """Poll for a paired session, or an OAuth-style pending/denied error."""
         _require_broker_db()
-        now = datetime.datetime.now(datetime.timezone.utc)
         row = await _db_cli_auth.pairing_by_id(body.pairing_id)
         if row is None:
             return _oauth_error("expired_token")
         # The verifier proves this poller is the device that started the pairing.
         if not _pairing_mod.verifier_matches(body.verifier, row.verifier_hash):
             return _oauth_error("access_denied")
-        expires_at = row.expires_at
-        if expires_at is not None and expires_at.tzinfo is None:
-            expires_at = expires_at.replace(tzinfo=datetime.timezone.utc)
-        if expires_at is not None and expires_at < now and row.status != "approved":
+        # The pairing TTL bounds the WHOLE window, approval included — an
+        # approved-but-forgotten code must not be collectible days later.
+        if _pairing_expired(row):
             return _oauth_error("expired_token")
         if row.status == "denied":
             return _oauth_error("access_denied")
-        if row.status in ("pending",):
-            return _oauth_error("authorization_pending", interval=row.interval_seconds)
+        if row.status == "pending":
+            # RFC 8628 §3.5: refuse polls faster than the interval, backing off.
+            too_fast, interval = await _db_cli_auth.note_poll(row.id)
+            return _oauth_error(
+                "slow_down" if too_fast else "authorization_pending", interval=interval
+            )
         if row.status != "approved":
             return _oauth_error("expired_token")
         # Approved: mint on collection, exactly once.
@@ -7082,6 +7131,8 @@ def create_app(
             raise HTTPException(400, "code_challenge must be S256 (43-char base64url)")
         if not _cli_auth_mod.loopback_redirect_ok(redirect_uri):
             raise HTTPException(400, "redirect_uri must be an http loopback-IP /callback")
+        if role and role not in (r.value for r in TokenRole):
+            raise HTTPException(400, f"unknown role: {role}")
         txn_id = _cli_auth_mod.new_txn_id()
         await _db_cli_auth.create_login_txn(
             txn_id=txn_id,
@@ -7205,14 +7256,22 @@ def create_app(
             for slug in sorted(await _db_orgs.member_org_slugs(actor.name)):
                 is_owner = await _db_orgs.is_owner(slug, actor.name)
                 orgs.append({"slug": slug, "role": "owner" if is_owner else "member"})
+        issuer = subject = ""
+        if actor.principal_id is not None and _use_db and _db_principals is not None:
+            p = await _db_principals.by_id(actor.principal_id)
+            if p is not None:
+                issuer, subject = p.issuer, p.subject
         return {
             "name": actor.name,
             "role": actor.role.value,
             "kind": actor.credential_kind,
             "principal": actor.name if actor.credential_kind in ("session", "delegated") else "",
             "email": actor.email,
+            "issuer": issuer,
+            "subject": subject,
             "device": actor.credential_name if actor.credential_kind == "token" else "",
             "session_id": actor.session_id,
+            "expires_at": actor.expires_at.isoformat() if actor.expires_at else "",
             "orgs": orgs,
         }
 
@@ -7263,79 +7322,34 @@ def create_app(
             created = created.replace(tzinfo=datetime.timezone.utc)
         return max(0, int((datetime.datetime.now(datetime.timezone.utc) - created).total_seconds()))
 
-    @app.get("/link", response_class=HTMLResponse, include_in_schema=False)
-    async def link_page(request: Request, code: str = Query("")):
-        _require_db_account()
-        resolved = await _current_session(request)
-        if resolved is None:
-            return RedirectResponse("/auth/oidc/login?next=/link", status_code=303)
-        row, principal = resolved
-        csrf_for = _csrf_for(str(row.id))
-        norm = _pairing_mod.normalize_user_code(code) if code else None
-        if norm:
-            pairing = await _db_cli_auth.pairing_by_user_code(norm)
-            if pairing is not None and pairing.status == "pending":
-                return HTMLResponse(
-                    link_ui.confirm_html(
-                        csrf=csrf_for(_csrf_mod.REF_LINK_APPROVE),
-                        field=_csrf_mod.FIELD,
-                        user_code=norm,
-                        device_label=pairing.device_label,
-                        platform=pairing.platform,
-                        client_version=pairing.client_version,
-                        client_ip=pairing.client_ip,
-                        requested_role=pairing.requested_role,
-                        allowed_roles=_allowed_cli_roles(principal.last_role),
-                        elapsed_seconds=_elapsed_seconds(pairing.created_at),
-                    )
-                )
-        return HTMLResponse(
-            link_ui.code_entry_html(
-                csrf=csrf_for(_csrf_mod.REF_LINK_SUBMIT), field=_csrf_mod.FIELD, prefill=code
-            )
-        )
+    def _client_ip(request: Request) -> str:
+        return request.client.host if request.client else ""
 
-    @app.post("/link/submit", response_class=HTMLResponse, include_in_schema=False)
-    async def link_submit(request: Request, user_code: str = Form("")):
-        _require_db_account()
-        resolved = await _current_session(request)
-        if resolved is None:
-            return RedirectResponse("/auth/oidc/login?next=/link", status_code=303)
-        row, principal = resolved
-        form = await request.form()
-        _check_csrf(
-            request, str(row.id), _csrf_mod.REF_LINK_SUBMIT, str(form.get(_csrf_mod.FIELD, ""))
-        )
-        csrf_for = _csrf_for(str(row.id))
-        client_ip = request.client.host if request.client else ""
+    def _pairing_expired(pairing) -> bool:
+        exp = pairing.expires_at
+        if exp is not None and exp.tzinfo is None:
+            exp = exp.replace(tzinfo=datetime.timezone.utc)
+        return exp is not None and exp < datetime.datetime.now(datetime.timezone.utc)
+
+    async def _link_lookup(client_ip: str, norm: str | None):
+        """Resolve a user code to a pending pairing, enforcing brute-force lockout.
+
+        Returns ``(pairing, error)`` where error is "" (ok), "locked" (429) or
+        "invalid" (404).  EVERY user-code lookup — GET /link deep-link, submit,
+        approve, deny — funnels through here, so the DB-backed lockout that
+        justifies the deliberately short user code (roadmap §10) cannot be
+        sidestepped by hitting a different endpoint.  A miss records a failure.
+        """
         if await _db_cli_auth.is_locked_out(client_ip):
-            return HTMLResponse(
-                link_ui.code_entry_html(
-                    csrf=csrf_for(_csrf_mod.REF_LINK_SUBMIT),
-                    field=_csrf_mod.FIELD,
-                    error="Too many attempts — wait a few minutes and try again.",
-                ),
-                status_code=429,
-            )
-        norm = _pairing_mod.normalize_user_code(user_code)
+            return None, "locked"
         pairing = await _db_cli_auth.pairing_by_user_code(norm) if norm else None
-        expired = False
-        if pairing is not None:
-            exp = pairing.expires_at
-            if exp is not None and exp.tzinfo is None:
-                exp = exp.replace(tzinfo=datetime.timezone.utc)
-            expired = exp is not None and exp < datetime.datetime.now(datetime.timezone.utc)
-        if norm is None or pairing is None or pairing.status != "pending" or expired:
+        if pairing is None or pairing.status != "pending" or _pairing_expired(pairing):
             await _db_cli_auth.record_failure(client_ip)
-            return HTMLResponse(
-                link_ui.code_entry_html(
-                    csrf=csrf_for(_csrf_mod.REF_LINK_SUBMIT),
-                    field=_csrf_mod.FIELD,
-                    prefill=user_code,
-                    error="That code is not valid or has expired.",
-                ),
-                status_code=404,
-            )
+            return None, "invalid"
+        return pairing, ""
+
+    def _render_confirm(row, principal, pairing, norm):
+        csrf_for = _csrf_for(str(row.id))
         return HTMLResponse(
             link_ui.confirm_html(
                 csrf=csrf_for(_csrf_mod.REF_LINK_APPROVE),
@@ -7351,6 +7365,65 @@ def create_app(
             )
         )
 
+    def _render_code_entry(row, *, prefill: str = "", error: str = "", status: int = 200):
+        csrf_for = _csrf_for(str(row.id))
+        return HTMLResponse(
+            link_ui.code_entry_html(
+                csrf=csrf_for(_csrf_mod.REF_LINK_SUBMIT),
+                field=_csrf_mod.FIELD,
+                prefill=prefill,
+                error=error,
+            ),
+            status_code=status,
+        )
+
+    _locked_msg = "Too many attempts — wait a few minutes and try again."
+
+    @app.get("/link", response_class=HTMLResponse, include_in_schema=False)
+    async def link_page(request: Request, code: str = Query("")):
+        _require_db_account()
+        resolved = await _current_session(request)
+        norm = _pairing_mod.normalize_user_code(code) if code else None
+        if resolved is None:
+            # Carry the (normalised) code across the sign-in round-trip so the
+            # one-click verification_uri_complete deep-link is not lost.
+            from urllib.parse import quote
+
+            nxt = f"/link?code={norm}" if norm else "/link"
+            return RedirectResponse(f"/auth/oidc/login?next={quote(nxt, safe='')}", status_code=303)
+        row, principal = resolved
+        if norm:
+            pairing, err = await _link_lookup(_client_ip(request), norm)
+            if err == "locked":
+                return _render_code_entry(row, error=_locked_msg, status=429)
+            if pairing is not None:
+                return _render_confirm(row, principal, pairing, norm)
+            return _render_code_entry(
+                row, prefill=code, error="That code is not valid or has expired.", status=404
+            )
+        return _render_code_entry(row)
+
+    @app.post("/link/submit", response_class=HTMLResponse, include_in_schema=False)
+    async def link_submit(request: Request, user_code: str = Form("")):
+        _require_db_account()
+        resolved = await _current_session(request)
+        if resolved is None:
+            return RedirectResponse("/auth/oidc/login?next=/link", status_code=303)
+        row, principal = resolved
+        form = await request.form()
+        _check_csrf(
+            request, str(row.id), _csrf_mod.REF_LINK_SUBMIT, str(form.get(_csrf_mod.FIELD, ""))
+        )
+        norm = _pairing_mod.normalize_user_code(user_code)
+        pairing, err = await _link_lookup(_client_ip(request), norm)
+        if err == "locked":
+            return _render_code_entry(row, error=_locked_msg, status=429)
+        if pairing is None:
+            return _render_code_entry(
+                row, prefill=user_code, error="That code is not valid or has expired.", status=404
+            )
+        return _render_confirm(row, principal, pairing, norm)
+
     @app.post("/link/approve", response_class=HTMLResponse, include_in_schema=False)
     async def link_approve(request: Request, user_code: str = Form(""), role: str = Form("")):
         _require_db_account()
@@ -7362,9 +7435,15 @@ def create_app(
         _check_csrf(
             request, str(row.id), _csrf_mod.REF_LINK_APPROVE, str(form.get(_csrf_mod.FIELD, ""))
         )
+        client_ip = _client_ip(request)
         norm = _pairing_mod.normalize_user_code(user_code)
-        pairing = await _db_cli_auth.pairing_by_user_code(norm) if norm else None
-        if pairing is None or pairing.status != "pending":
+        pairing, err = await _link_lookup(client_ip, norm)
+        if err == "locked":
+            return HTMLResponse(
+                link_ui.result_html("Too many attempts", _locked_msg, kind="is-danger is-light"),
+                status_code=429,
+            )
+        if pairing is None:
             return HTMLResponse(
                 link_ui.result_html(
                     "Nothing to approve",
@@ -7375,7 +7454,6 @@ def create_app(
             )
         granted = _clamp_cli_role(role, principal.last_role).value
         await _db_cli_auth.approve_pairing(pairing.id, principal.id, granted)
-        client_ip = request.client.host if request.client else ""
         await _db_cli_auth.clear_failures(client_ip)
         if _db_audit is not None:
             await _db_audit.record(
@@ -7403,10 +7481,17 @@ def create_app(
         _check_csrf(
             request, str(row.id), _csrf_mod.REF_LINK_DENY, str(form.get(_csrf_mod.FIELD, ""))
         )
+        client_ip = _client_ip(request)
         norm = _pairing_mod.normalize_user_code(user_code)
-        pairing = await _db_cli_auth.pairing_by_user_code(norm) if norm else None
+        pairing, err = await _link_lookup(client_ip, norm)
+        if err == "locked":
+            return HTMLResponse(
+                link_ui.result_html("Too many attempts", _locked_msg, kind="is-danger is-light"),
+                status_code=429,
+            )
         if pairing is not None:
             await _db_cli_auth.deny_pairing(pairing.id)
+            await _db_cli_auth.clear_failures(client_ip)
         return HTMLResponse(
             link_ui.result_html(
                 "Device denied", "The pairing request was denied.", kind="is-danger is-light"
@@ -7621,15 +7706,27 @@ def create_app(
         """Post-sign-in redirect target — a literal allow-list, never a regex.
 
         An open redirect here is a full account-takeover primitive, so this
-        accepts only the fixed dashboard/account destinations and the CLI
-        loopback-login resume leg (``/v1/auth/resume/<txn_id>``), whose id is a
-        server-minted url-safe token and whose path shape is checked exactly.
+        accepts only fixed local destinations whose *shape* is checked exactly:
+        the dashboard/account pages, the device-pairing approval page ``/link``
+        (optionally carrying a normalised ``?code=`` deep-link), the CLI
+        loopback resume leg ``/v1/auth/resume/<txn_id>``, and an org manage page
+        ``/org/<slug>/manage``.  Every accepted value begins with a single ``/``
+        and no ``//`` or backslash, so it can never point off-site.
         """
-        if value in ("/account", "/admin"):
+        if value in ("/account", "/admin", "/link"):
             return value
+        # /link?code=XXXXXXXX — only our own normalised user-code shape.
+        if value.startswith("/link?code="):
+            code = value[len("/link?code=") :]
+            if code and code.isalnum() and len(code) <= 16:
+                return value
         if value.startswith("/v1/auth/resume/"):
             txn = value[len("/v1/auth/resume/") :]
             if txn and "/" not in txn and all(c.isalnum() or c in "-_" for c in txn):
+                return value
+        if value.startswith("/org/") and value.endswith("/manage"):
+            slug = value[len("/org/") : -len("/manage")]
+            if slug and "/" not in slug and all(c.isalnum() or c in "-" for c in slug):
                 return value
         return "/account"
 

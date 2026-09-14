@@ -2540,7 +2540,7 @@ def org_manage_html(
               <td>{krole} {owner_tag}</td>
               <td class="has-text-right">
                 <form method="post" action="/org/{safe_slug}/members/remove" style="display:inline"
-                      onsubmit="return confirm('Remove {name} from {safe_slug}?')">
+                      onsubmit="return confirm('Remove this member from {safe_slug}?')">
                   <input type="hidden" name="{esc(field)}" value="{esc(csrf_remove)}">
                   <input type="hidden" name="token_name" value="{name}">
                   <button class="button is-small is-danger is-light" type="submit">Remove</button>

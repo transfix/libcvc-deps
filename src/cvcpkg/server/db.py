@@ -411,17 +411,34 @@ class CliPairingRow(Base):
     status: Mapped[str] = mapped_column(
         String(16), nullable=False, default="pending", server_default="pending"
     )
-    requested_role: Mapped[str] = mapped_column(String(32), nullable=False, default="")
-    granted_role: Mapped[str] = mapped_column(String(32), nullable=False, default="")
-    device_label: Mapped[str] = mapped_column(String(128), nullable=False, default="")
-    client_version: Mapped[str] = mapped_column(String(32), nullable=False, default="")
-    platform: Mapped[str] = mapped_column(String(64), nullable=False, default="")
-    client_ip: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    requested_role: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="", server_default=""
+    )
+    granted_role: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="", server_default=""
+    )
+    device_label: Mapped[str] = mapped_column(
+        String(128), nullable=False, default="", server_default=""
+    )
+    client_version: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="", server_default=""
+    )
+    platform: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
+    client_ip: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="", server_default=""
+    )
     principal_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("principals.id", ondelete="CASCADE"), nullable=True
     )
-    interval_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
-    slow_down_strikes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    interval_seconds: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=5, server_default="5"
+    )
+    slow_down_strikes: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    last_poll_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -441,9 +458,13 @@ class CliAuthCodeRow(Base):
         Integer, ForeignKey("principals.id", ondelete="CASCADE"), nullable=False
     )
     role: Mapped[str] = mapped_column(String(32), nullable=False)
-    code_challenge: Mapped[str] = mapped_column(String(64), nullable=False, default="")
-    redirect_uri: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    device_label: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    code_challenge: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="", server_default=""
+    )
+    redirect_uri: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    device_label: Mapped[str] = mapped_column(
+        String(128), nullable=False, default="", server_default=""
+    )
     used: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=false()
     )
@@ -459,12 +480,20 @@ class CliLoginTxnRow(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     txn_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
-    client_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
-    redirect_uri: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    cli_state: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    code_challenge: Mapped[str] = mapped_column(String(64), nullable=False, default="")
-    requested_role: Mapped[str] = mapped_column(String(32), nullable=False, default="")
-    device_label: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    client_id: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="", server_default=""
+    )
+    redirect_uri: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    cli_state: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    code_challenge: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="", server_default=""
+    )
+    requested_role: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="", server_default=""
+    )
+    device_label: Mapped[str] = mapped_column(
+        String(128), nullable=False, default="", server_default=""
+    )
     expires_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, index=True
     )
@@ -940,6 +969,18 @@ def init_db(database_url: str) -> None:
             connect_args={"check_same_thread": False},
             **pool_kwargs,
         )
+        # SQLite enforces foreign keys only when asked, per connection — without
+        # this, ondelete=CASCADE on the auth tables is a silent no-op and a
+        # deleted principal would orphan its sessions/pairings/codes on SQLite
+        # while cascading on Postgres.  Match production behaviour everywhere.
+        from sqlalchemy import event as _sa_event
+
+        @_sa_event.listens_for(_engine.sync_engine, "connect")
+        def _enable_sqlite_fks(dbapi_conn, _record):  # pragma: no cover - trivial
+            cur = dbapi_conn.cursor()
+            cur.execute("PRAGMA foreign_keys=ON")
+            cur.close()
+
     else:
         _engine = create_async_engine(
             database_url,

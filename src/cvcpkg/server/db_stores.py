@@ -2431,6 +2431,39 @@ class DbOrgStore:
             if org is None:
                 raise ValueError(f"organization '{slug}' not found")
 
+            # Refuse to remove the last owner: doing so would leave the org
+            # unmanageable by anyone but a global super-admin, with no
+            # self-service recovery. The new one-click web UI makes this easy to
+            # trip, so the guard lives in the store where every path crosses it.
+            target = (
+                (
+                    await session.execute(
+                        select(OrgMemberRow).where(
+                            OrgMemberRow.org_id == org.id,
+                            OrgMemberRow.token_name == token_name,
+                        )
+                    )
+                )
+                .scalars()
+                .first()
+            )
+            if target is None:
+                return False
+            if target.role == OrgRole.owner.value:
+                owner_count = (
+                    await session.execute(
+                        select(sa_func.count(OrgMemberRow.id)).where(
+                            OrgMemberRow.org_id == org.id,
+                            OrgMemberRow.role == OrgRole.owner.value,
+                        )
+                    )
+                ).scalar() or 0
+                if owner_count <= 1:
+                    raise ValueError(
+                        f"cannot remove the last owner of '{slug}'; "
+                        "promote another member to owner first"
+                    )
+
             result = await session.execute(
                 sa_delete(OrgMemberRow).where(
                     OrgMemberRow.org_id == org.id,
